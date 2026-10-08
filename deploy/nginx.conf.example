@@ -1,0 +1,22 @@
+# Alternative to Caddy: nginx + certbot (Let's Encrypt). Gateway listening on 127.0.0.1:8080.
+server {
+    listen 80;
+    server_name gw.example.in;
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }
+    location / { return 301 https://$host$request_uri; }
+}
+server {
+    listen 443 ssl http2;
+    server_name gw.example.in;
+    ssl_certificate     /etc/letsencrypt/live/gw.example.in/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/gw.example.in/privkey.pem;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_buffering off;          # Server-Sent Events
+        proxy_read_timeout 1h;
+    }
+}
