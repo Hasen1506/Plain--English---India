@@ -48,6 +48,7 @@ describe("gateway: auth, CORS and broker login (mock Upstox)", () => {
     const c = await h.api("GET", "/api/chain?u=NIFTY&expiry=2026-10-13");
     expect(c.status).toBe(401);
     expect(c.body.error).toBe("no-session");
+    expect((await h.api("GET", "/api/spots?u=NIFTY")).status).toBe(401);
   });
 
   it("OAuth: bad state is rejected; the real flow stores a session and never exposes the token", async () => {
@@ -79,6 +80,16 @@ describe("gateway: auth, CORS and broker login (mock Upstox)", () => {
     expect(m.body.final).toBeLessThan(m.body.required as number);
     const b = await h.api("POST", "/api/charges/broker", { key: sg.legs[0]!.inst.key, qty: sg.qty, side: "BUY", product: "D", price: sg.legs[0]!.price });
     expect(b.body.total).toBeCloseTo(sg.legs.length ? (b.body.total as number) : 0);
+  });
+
+  it("spots for the picker: real price only; no day change or sparkline when the broker gives none", async () => {
+    const r = await h.api("GET", "/api/spots?u=NIFTY,RELIANCE,NOPE&spark=NIFTY");
+    expect(r.status).toBe(200);
+    const sp = r.body.spots as Record<string, { ltp: number | null; changePct: number | null; spark: number[] | null }>;
+    expect(sp.NIFTY!.ltp).toBeGreaterThan(20000);
+    expect(sp.NIFTY!.changePct).toBeNull(); // the mock's quotes carry no net_change
+    expect(sp.NIFTY!.spark).toBeNull(); // the mock has no intraday candles
+    expect(sp.NOPE).toEqual({ ltp: null, changePct: null, spark: null });
   });
 
   it("market status comes from the official holiday list", async () => {
