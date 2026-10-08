@@ -26,7 +26,7 @@ Reliance 27 Oct, plus the Upstox instrument master and holiday list in `tests/fi
 labelled *DEMO · recorded prices from 8 Oct 2026 · no broker, no orders* on every screen, has no
 gateway and no broker, and can only place **paper** trades. The recording is a single snapshot, so
 the demo shows no day change and no intraday chart. Margin and the broker's own charge figure say
-"not available in the demo".
+"unavailable: no broker in the demo".
 
 ## How it fits together
 
