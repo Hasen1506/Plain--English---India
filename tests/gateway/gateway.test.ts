@@ -6,6 +6,7 @@ import { AuditLog } from "../../gateway/audit.ts";
 import { suggest } from "../../src/core/strategy.ts";
 import { FIXTURE_NOW } from "../mock/fixtures.ts";
 import type { Chain } from "../../src/core/chain.ts";
+import { istMs } from "../../src/core/ist.ts";
 
 describe("gateway: auth, CORS and broker login (mock Upstox)", () => {
   let h: Harness;
@@ -260,5 +261,62 @@ describe("gateway: live trading is OFF unless the server enables it", () => {
     expect(r.status).toBe(403);
     expect(r.body.error).toBe("live-disabled");
     expect((await h.api("GET", "/api/session")).body.liveTrading).toBe(false);
+  });
+});
+
+describe("gateway: commodities (MCX) and currency", () => {
+  let h: Harness;
+  beforeAll(async () => {
+    h = await startHarness({ LIVE_TRADING_ENABLED: "1" });
+    await h.brokerLogin();
+  });
+  afterAll(async () => h.close());
+
+  it("lists every category with its venue, lot and options-or-futures-only", async () => {
+    const u = (await h.api("GET", "/api/instruments/underlyings")).body.underlyings as { id: string; category: string; venue: string; lotSize: number; hasOptions: boolean }[];
+    const by = (id: string) => u.find((x) => x.id === id)!;
+    expect(by("NIFTY")).toMatchObject({ category: "index", venue: "NFO", hasOptions: true });
+    expect(by("GOLD")).toMatchObject({ category: "metal", venue: "MCX", lotSize: 100, hasOptions: true });
+    expect(by("CRUDEOILM")).toMatchObject({ category: "energy", venue: "MCX", lotSize: 10, hasOptions: true });
+    expect(by("ALUMINIUM")).toMatchObject({ category: "metal", hasOptions: false });
+    expect(by("USDINR")).toMatchObject({ category: "currency", venue: "CDS", lotSize: 1000 });
+  });
+
+  it("per-venue market hours in the session", async () => {
+    const s = await h.api("GET", "/api/session");
+    const v = s.body.venues as { venue: string; label: string; canTrade: boolean }[];
+    expect(v.find((x) => x.venue === "MCX")).toMatchObject({ canTrade: true, label: "MCX open till 23:30" });
+    expect(v.find((x) => x.venue === "NFO")!.canTrade).toBe(true);
+    expect((s.body.liveBlocked as Record<string, string>).MCX_FO).toMatch(/UDAPI1161/);
+  });
+
+  it("builds an MCX chain from market quotes (no MCX option-chain API) off the futures price", async () => {
+    const c = (await h.api("GET", "/api/chain?u=GOLD&expiry=2026-10-30")).body as unknown as Chain;
+    expect(c.source).toBe("Upstox quotes · MCX");
+    expect(c.spot).toBe(148984); // the recorded GOLD FUT 04 DEC 26 price
+    expect(c.expiryMs).toBe(istMs("2026-10-30", 23, 30));
+    const q = c.rows.find((r) => r.call?.q?.bid)!.call!.q!;
+    expect(q.bidQty % 100).toBe(0); // depth in lots × 100
+    const no = await h.api("GET", "/api/chain?u=ALUMINIUM&expiry=2026-10-30");
+    expect(no.status).toBe(404);
+    expect(no.body.error).toBe("no-options");
+    const cur = await h.api("GET", `/api/chain?u=USDINR&expiry=2026-10-16`);
+    expect(cur.status).toBe(502); // the mock has no recorded currency prices: said, not invented
+  });
+
+  it("paper-trades a commodity spread; live commodity orders are refused even with the phrase", async () => {
+    const c = (await h.api("GET", "/api/chain?u=CRUDEOILM&expiry=2026-10-15")).body as unknown as Chain;
+    const sg = suggest({ underlying: "CRUDEOILM", dir: "above", mode: "stays", level: 8900, expiryDate: "2026-10-15", risk: 20000 }, c, { now: FIXTURE_NOW }).suggestions[0]!;
+    const legs = sg.legs.map((l) => ({ key: l.inst.key, side: l.side, qty: l.qty, limit: l.limit }));
+    const before = (await h.mockState()).orders.length;
+    const live = await h.api("POST", "/api/trade/options", { mode: "live", legs, confirm: "REAL MONEY" });
+    expect(live.status).toBe(403);
+    expect(live.body.error).toBe("live-blocked");
+    const r = await h.api("POST", "/api/trade/options", { mode: "paper", legs });
+    expect(r.status).toBe(200);
+    expect(r.body.paper).toBe(true);
+    // sized to the recorded book, so both legs fill (before that fix a 29-lot order left a leg needing attention)
+    expect((r.body.result as { status: string }).status).toBe("filled");
+    expect((await h.mockState()).orders.length).toBe(before);
   });
 });
