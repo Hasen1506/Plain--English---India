@@ -177,6 +177,8 @@ export interface BrokerAdapter {
   // ── market data (needs a session) ──
   quotes(keys: string[]): Promise<Result<Record<string, Quote>>>;
   optionChain(store: InstrumentStore, underlying: string, expiryDate: string): Promise<Result<Chain>>;
+  /** Today's intraday closes (oldest first) for a sparkline. Optional: no sparkline when missing. */
+  intraday?(key: string): Promise<Result<number[]>>;
   /** Live stream (WebSocket). Returns an unsubscribe function, or null when streaming is unavailable. */
   stream?(keys: string[], onQuote: (key: string, q: Partial<Quote>) => void, onClose: (why: string) => void): Promise<(() => void) | null>;
 

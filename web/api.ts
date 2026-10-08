@@ -16,9 +16,13 @@ const SS_TOKEN = "pei.token";
 
 export const defaultGateway = (): string => localStorage.getItem(LS_URL) ?? (import.meta.env.VITE_E2E ? "http://127.0.0.1:18780" : (import.meta.env.VITE_GATEWAY_URL ?? ""));
 
+type DemoHandler = (method: string, path: string, body?: Record<string, unknown>) => Promise<unknown>;
+
 export const api = {
   base: defaultGateway(),
   token: sessionStorage.getItem(SS_TOKEN) ?? "",
+  /** Demo mode: requests are answered in the browser from recorded fixtures (see demo.ts). */
+  demo: null as DemoHandler | null,
   setBase(u: string) {
     this.base = u.trim().replace(/\/$/, "");
     localStorage.setItem(LS_URL, this.base);
@@ -29,6 +33,14 @@ export const api = {
     else sessionStorage.removeItem(SS_TOKEN);
   },
   async call<T = Record<string, unknown>>(method: string, path: string, body?: unknown): Promise<T> {
+    if (this.demo) {
+      try {
+        return (await this.demo(method, path, (body ?? {}) as Record<string, unknown>)) as T;
+      } catch (e) {
+        const x = e as { status?: number; code?: string; message: string };
+        throw new ApiError(x.status ?? 500, x.code ?? "demo", x.message);
+      }
+    }
     if (!this.base) throw new ApiError(0, "no-gateway", "Set your gateway URL first");
     let r: Response;
     try {

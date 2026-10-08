@@ -439,6 +439,38 @@ export function createGateway(deps: GatewayDeps) {
     return ok({ quotes: await quotesFor(keys) });
   });
 
+  // spot, day change and today's intraday closes per underlying, for the picker. Only real broker data:
+  // a missing day change or sparkline is left out, never estimated.
+  const sparkCache = new Map<string, { at: number; closes: number[] | null }>();
+  route("GET", "/api/spots", true, async (r) => {
+    const s = needStore();
+    if (!adapter.session()) bad("no-session", "Log in to Upstox for live prices", 401);
+    const ids = (r.query.get("u") ?? "").split(",").filter(Boolean).slice(0, 300);
+    const sparkFor = new Set((r.query.get("spark") ?? "").split(",").filter(Boolean).slice(0, 8));
+    const keyOf = new Map(ids.map((u) => [u, s.spotKey(u)] as const));
+    const keys = [...new Set([...keyOf.values()].filter((k): k is string => Boolean(k)))];
+    const q = keys.length ? await quotesFor(keys) : {};
+    const spots: Record<string, { ltp: number | null; changePct: number | null; spark: number[] | null }> = {};
+    for (const u of ids) {
+      const k = keyOf.get(u);
+      const x = k ? q[k] : undefined;
+      const ltp = x?.ltp ?? null;
+      const prev = ltp !== null && typeof x?.change === "number" ? ltp - x.change : null;
+      let spark: number[] | null = null;
+      if (k && sparkFor.has(u) && adapter.intraday) {
+        const c = sparkCache.get(k);
+        if (c && now() - c.at < 5 * 60_000) spark = c.closes;
+        else {
+          const res = await adapter.intraday(k);
+          spark = res.ok && res.value.length >= 2 ? res.value : null;
+          sparkCache.set(k, { at: now(), closes: spark });
+        }
+      }
+      spots[u] = { ltp, changePct: prev && prev > 0 ? (ltp! - prev) / prev : null, spark };
+    }
+    return ok({ spots, at: now() });
+  });
+
   route("GET", "/api/stream", true, async (r) => {
     const keys = (r.query.get("keys") ?? "").split(",").filter(Boolean).slice(0, 100);
     if (!adapter.session()) bad("no-session", "Log in to Upstox for live prices", 401);

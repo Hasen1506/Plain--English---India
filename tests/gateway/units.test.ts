@@ -34,7 +34,10 @@ describe("gateway auth primitives", () => {
     const s = makeState(SECRET, 1000);
     expect(checkState(s, SECRET, 2000)).toBe(true);
     expect(checkState(s, SECRET, 1000 + 11 * 60_000)).toBe(false);
-    expect(checkState(s.replace(/.$/, (c) => (c === "A" ? "B" : "A")), SECRET, 2000)).toBe(false);
+    const [n, e, mac] = s.split(".") as [string, string, string];
+    expect(checkState(`${n}.${e}.${mac[0] === "A" ? "B" : "A"}${mac.slice(1)}`, SECRET, 2000)).toBe(false);
+    // a changed last character that decodes to the same bytes (unused low bits) is still refused
+    for (const c of "ABCD") expect(checkState(`${n}.${e}.${mac.slice(0, -1)}${c}`, SECRET, 2000)).toBe(mac.endsWith(c));
     expect(checkState("a.b", SECRET, 0)).toBe(false);
   });
   it("passphrase hashing (scrypt) verifies only the right passphrase", () => {

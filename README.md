@@ -17,6 +17,17 @@ Dhan, Fyers and Angel One SmartAPI are interface stubs that honestly report "not
 > **Status:** everything except deployment and your broker credentials is built and
 > tested offline. Nothing here has placed a real order. Read [What is and isn't verified](#what-is-and-isnt-verified).
 
+## Try the demo
+
+The public site (<https://hasen1506.github.io/Plain--English---India/>, or add `#demo`) has a
+**Try the demo** button. It runs the whole UI in your browser against the public data recorded on
+**Thu 8 Oct 2026, 10:39 IST** (NSE option chains for Nifty 13 & 27 Oct, Bank Nifty, Fin Nifty and
+Reliance 27 Oct, plus the Upstox instrument master and holiday list in `tests/fixtures/`). It is
+labelled *DEMO · recorded prices from 8 Oct 2026 · no broker, no orders* on every screen, has no
+gateway and no broker, and can only place **paper** trades. The recording is a single snapshot, so
+the demo shows no day change and no intraday chart. Margin and the broker's own charge figure say
+"not available in the demo".
+
 ## How it fits together
 
 ```
@@ -52,6 +63,7 @@ Dhan, Fyers and Angel One SmartAPI are interface stubs that honestly report "not
 | Account | Portfolio (positions, holdings, funds, P&L), order book with cancel, trades, GTT, P&L report. |
 | Safety | Kill switch (blocks new entries; exits allowed); **Cancel all**; **Exit all** (reduce-only protective limits, typed `EXIT ALL`); optional per-trade cap and daily loss cap (**off by default**); typed **`REAL MONEY`** confirmation; ≤ 5 orders/s (SEBI's no-registration threshold is 10/s); live trading off unless the server sets `LIVE_TRADING_ENABLED=1`. |
 | Paper mode | Fills simulated against **live** quotes (crossing the touch, capped at the displayed size), clearly labelled, `PAPER-` order ids, never mixed with real fills. Nothing reaches the broker. |
+| Look and feel | One big sentence with coloured pills (index, direction, level, expiry, amount), each opening an animated popover: index/stock picker with price, day change and a sparkline when the broker reports them; level and amount sliders with "% from spot · x% chance"; expiries with weekly/monthly tags, days left and the chance per expiry. A floating dock (Options, Stocks, Portfolio, Orders, Safety) with a "Review for ₹X" button; a review screen with three outcomes, a P/L bar chart, collapsible contracts and a quote-freshness countdown. Mobile first; respects reduced motion. |
 | Honesty | No made-up prices. Without a broker session the app says "Log in to Upstox" and shows no trades. Mock data exists only in tests. |
 
 ## Repository layout
@@ -110,12 +122,15 @@ NSE option chains and holiday master) captured on 8 Oct 2026; see `tests/fixture
 
 **Verified offline (tests):** all the maths and rules above; the gateway's HTTP surface and
 risk enforcement against a mock that follows Upstox's documented request/response shapes; the
-UI flows on desktop and mobile.
+UI flows on desktop and mobile, including every pill popover and the demo mode.
 
 **Verified against the real Upstox (public, no login):** the instrument master download and
 parsing, the holiday API, and the expiry rules against today's listed contracts.
 
 **Not verified (needs your account):**
+* The picker's day change (`net_change` in the full market quote) and sparkline (intraday
+  30-minute candles) have only been exercised against the mock, which returns neither, so the
+  UI hides them. They are coded from Upstox's documentation and untested with a real token.
 * Upstox endpoints that need a login (chain, quotes, margin, brokerage, orders, positions, GTT,
   P&L, funds, the access-token-request webhook) are coded from Upstox's documentation and
   official SDK but have **not** been called with a real token. The opt-in live tests do that.

@@ -70,7 +70,8 @@ export function checkState(state: string, secret: string, now: number): boolean 
   if (!nonce || !exp || !mac) return false;
   const want = createHmac("sha256", secret).update(`state.${nonce}.${exp}`).digest();
   const got = Buffer.from(mac, "base64url");
-  return got.length === want.length && timingSafeEqual(got, want) && Number(exp) > now;
+  // reject non-canonical encodings too (a changed final character can decode to the same bytes)
+  return got.toString("base64url") === mac && got.length === want.length && timingSafeEqual(got, want) && Number(exp) > now;
 }
 
 /** Failed-login throttle: at most `max` failures per `windowMs` per client. */

@@ -207,7 +207,7 @@ export class UpstoxAdapter implements BrokerAdapter {
     const out: Record<string, Quote> = {};
     for (let i = 0; i < keys.length; i += 450) {
       const chunk = keys.slice(i, i + 450);
-      const r = await this.call<{ data: Record<string, { instrument_token: string; last_price?: number; depth?: { buy?: { price: number; quantity: number }[]; sell?: { price: number; quantity: number }[] }; oi?: number }> }>(
+      const r = await this.call<{ data: Record<string, { instrument_token: string; last_price?: number; net_change?: number; depth?: { buy?: { price: number; quantity: number }[]; sell?: { price: number; quantity: number }[] }; oi?: number }> }>(
         "GET",
         `${this.cfg.baseUrl}/v2/market-quote/quotes?instrument_key=${encodeURIComponent(chunk.join(","))}`,
       );
@@ -215,10 +215,18 @@ export class UpstoxAdapter implements BrokerAdapter {
       const now = this.cfg.now();
       for (const v of Object.values(r.value.data ?? {})) {
         const b = v.depth?.buy?.[0], s = v.depth?.sell?.[0];
-        out[v.instrument_token] = makeQuote({ ltp: v.last_price, bid: b?.price, ask: s?.price, bidQty: b?.quantity, askQty: s?.quantity, oi: v.oi }, now);
+        out[v.instrument_token] = makeQuote({ ltp: v.last_price, bid: b?.price, ask: s?.price, bidQty: b?.quantity, askQty: s?.quantity, oi: v.oi, change: v.net_change }, now);
       }
     }
     return { ok: true, value: out };
+  }
+
+  /** Today's 30-minute closes, oldest first (GET /v2/historical-candle/intraday/{key}/30minute). */
+  async intraday(key: string): Promise<Result<number[]>> {
+    const r = await this.call<{ data?: { candles?: unknown[][] } }>("GET", `${this.cfg.baseUrl}/v2/historical-candle/intraday/${encodeURIComponent(key)}/30minute`);
+    if (!r.ok) return r;
+    const closes = (r.value.data?.candles ?? []).map((c) => Number(c[4])).filter((x) => Number.isFinite(x) && x > 0);
+    return { ok: true, value: closes.reverse() };
   }
 
   async optionChain(store: InstrumentStore, underlying: string, expiryDate: string): Promise<Result<Chain>> {
