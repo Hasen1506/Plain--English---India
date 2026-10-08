@@ -1,0 +1,33 @@
+# Gateway + Caddy (automatic HTTPS from Let's Encrypt) on one VPS with a static IP.
+#   cp .env.example .env   (fill it in, see docs/SETUP.md)
+#   GATEWAY_DOMAIN=gw.example.in docker compose -f deploy/docker-compose.yml up -d --build
+services:
+  gateway:
+    build: ..
+    env_file: ../.env
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8080"
+      DATA_DIR: /data
+      TRUST_PROXY: "1"
+    volumes:
+      - gateway-data:/data
+    restart: unless-stopped
+    # not published: only Caddy talks to it
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      GATEWAY_DOMAIN: ${GATEWAY_DOMAIN:?set GATEWAY_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on: [gateway]
+    restart: unless-stopped
+volumes:
+  gateway-data:
+  caddy-data:
+  caddy-config:
