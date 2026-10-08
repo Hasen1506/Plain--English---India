@@ -1,0 +1,21 @@
+# systemd unit for running the gateway without Docker (Node 22.6+ installed).
+# sudo cp deploy/plain-english-india-gateway.service /etc/systemd/system/ && sudo systemctl enable --now plain-english-india-gateway
+[Unit]
+Description=Plain English India gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pei
+WorkingDirectory=/opt/plain-english-india
+EnvironmentFile=/opt/plain-english-india/.env
+Environment=HOST=127.0.0.1 PORT=8080 DATA_DIR=/var/lib/plain-english-india TRUST_PROXY=1
+ExecStart=/usr/bin/node --experimental-strip-types --no-warnings gateway/main.ts
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/plain-english-india
+StateDirectory=plain-english-india
+
+[Install]
+WantedBy=multi-user.target
