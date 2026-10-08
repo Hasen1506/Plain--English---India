@@ -1,0 +1,11 @@
+{$GATEWAY_DOMAIN} {
+	encode gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+	reverse_proxy gateway:8080 {
+		# keep Server-Sent Events streaming
+		flush_interval -1
+	}
+}
