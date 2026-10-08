@@ -1,98 +1,104 @@
-// Small DOM helpers for the redesigned UI: icons, popover placement, count-up numbers,
-// pill width morphing and sparklines. No framework; everything respects
-// prefers-reduced-motion.
+// The sister app's visual vocabulary, ported from Plain-English-Options so both apps look
+// and move the same: its icon set (trend arrows, chevron, outcome-row icons, dock icons),
+// the sparkline (src/lib/spark.ts), the payoff bar chart and axis (src/ui/views.ts), the
+// countdown ring, and popover placement. India-only additions are marked.
 
-export const reducedMotion = (): boolean => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+export { reducedMotion, popIn, popOut, setText, fillRange } from "./motion.ts";
 
-const svg = (d: string, extra = ""): string => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" ${extra}>${d}</svg>`;
+const svg = (d: string, w = "2"): string => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
 
+// sister app: src/ui/app.ts CHEV / UP / DN, src/ui/views.ts UP_IC / DN_IC / MID_IC, index.html dock icons
+const UP_D = '<path d="M3 17l6-6 4 4 8-8M15 7h6v6"/>';
+const DN_D = '<path d="M3 7l6 6 4-4 8 8M15 17h6v-6"/>';
 export const ICON = {
-  trend: svg('<path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/>'),
-  bag: svg('<path d="M6 7h12l1 13H5L6 7z"/><path d="M9 7a3 3 0 0 1 6 0"/>'),
-  pie: svg('<path d="M12 3v9h9"/><path d="M20.5 15A9 9 0 1 1 9 3.5"/>'),
-  list: svg('<path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r=".8"/><circle cx="3.5" cy="12" r=".8"/><circle cx="3.5" cy="18" r=".8"/>'),
-  shield: svg('<path d="M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/>'),
-  chev: svg('<path d="M6 9l6 6 6-6"/>', 'stroke-width="3"'),
-  arrow: svg('<path d="M5 12h14M13 6l6 6-6 6"/>'),
-  up: svg('<path d="M7 17L17 7M9 7h8v8"/>'),
-  down: svg('<path d="M7 7l10 10M17 9v8H9"/>'),
-  flat: svg('<path d="M5 12h14M13 6l6 6-6 6"/>'),
-  plus: svg('<path d="M12 5v14M5 12h14"/>'),
-  close: svg('<path d="M6 6l12 12M18 6L6 18"/>'),
+  chev: svg('<path d="M6 9l6 6 6-6"/>', "3"),
+  up: svg(UP_D, "2.4"), // trend up (pill, outcome rows)
+  down: svg(DN_D, "2.4"),
+  mid: svg('<path d="M4 12h15M14 7l5 5-5 5"/>', "2.4"),
+  // dock (stroke 2, as in the sister app's index.html)
+  build: svg(UP_D),
+  swap: svg('<path d="M7 4v16M17 4v16M3 8l4-4 4 4M13 16l4 4 4-4"/>'),
+  bars: svg('<path d="M4 20h16M6 20V12h4v8M10 20V6h4v14M14 20v-9h4v9"/>'),
+  history: svg('<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/>'),
+  shield: svg('<path d="M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/>'), // India: Safety tab, same stroke
   search: svg('<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>'),
   play: svg('<path d="M8 5l11 7-11 7V5z"/>'),
+  // the sister app's empty-state wallet icon stroke (1.8)
+  wallet: svg('<path d="M20 7V5.5A1.5 1.5 0 0 0 18.5 4h-13A1.5 1.5 0 0 0 4 5.5v13A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V17"/><path d="M14 12h7v5h-7a2.5 2.5 0 0 1 0-5z"/>', "1.8"),
 };
 
-/** A tiny sparkline from real closes, or "" when there are fewer than two points (never a fake line). */
-export function sparkline(closes: number[] | null | undefined, w = 64, h = 22): string {
-  if (!closes || closes.length < 2) return "";
-  const lo = Math.min(...closes), hi = Math.max(...closes);
-  const span = hi - lo || 1;
-  const pts = closes.map((c, i) => `${((i / (closes.length - 1)) * w).toFixed(1)},${(h - 2 - ((c - lo) / span) * (h - 4)).toFixed(1)}`).join(" ");
-  const up = closes[closes.length - 1]! >= closes[0]!;
-  return `<svg class="x-spark" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" aria-hidden="true"><polyline points="${pts}" fill="none" stroke="${up ? "#22a45a" : "#d1453b"}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+/** SVG path for a sparkline in a w×h box, or null when there is not enough data (sister app src/lib/spark.ts). */
+export function sparkPath(values: number[], w = 64, h = 22, pad = 2): string | null {
+  const v = values.filter((x) => Number.isFinite(x));
+  if (v.length < 2) return null;
+  const lo = Math.min(...v), hi = Math.max(...v), span = hi - lo || 1;
+  const step = (w - pad * 2) / (v.length - 1);
+  return v
+    .map((x, i) => {
+      const X = pad + i * step;
+      const Y = hi === lo ? h / 2 : pad + (1 - (x - lo) / span) * (h - pad * 2);
+      return `${i ? "L" : "M"}${X.toFixed(1)} ${Y.toFixed(1)}`;
+    })
+    .join("");
 }
 
-const raf = (f: FrameRequestCallback): number => (typeof requestAnimationFrame === "function" ? requestAnimationFrame(f) : window.setTimeout(() => f(performance.now()), 16));
-
-/** Animate a number in `el` from its previous value to `to` (about 320 ms, ease-out). */
-export function countTo(el: HTMLElement | null, to: number, fmt: (v: number) => string): void {
-  if (!el) return;
-  const from = Number(el.dataset.val);
-  el.dataset.val = String(to);
-  if (!Number.isFinite(from) || from === to || reducedMotion() || !Number.isFinite(to)) {
-    el.textContent = fmt(to);
-    return;
-  }
-  const t0 = performance.now(), dur = 320;
-  const tick = (t: number) => {
-    if (el.dataset.val !== String(to)) return; // superseded
-    const k = Math.min(1, (t - t0) / dur);
-    const e = 1 - Math.pow(1 - k, 3);
-    el.textContent = fmt(from + (to - from) * e);
-    if (k < 1) raf(tick);
-  };
-  raf(tick);
+/** The whole sparkline as inline SVG, or "" when there is no real data (never a fake line). */
+export function sparkSvg(values: number[] | null | undefined, w = 64, h = 22): string {
+  const d = values ? sparkPath(values, w, h) : null;
+  if (!d || !values) return "";
+  const up = values[values.length - 1]! >= values[0]!;
+  return `<svg class="x-spark" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" aria-hidden="true"><path d="${d}" fill="none" stroke="${up ? "#22a45a" : "#d0453a"}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 }
 
-/** Replace a pill's content and animate its width from the old to the new size. */
-export function morph(el: HTMLElement | null, html: string): void {
-  if (!el) return;
-  if (el.innerHTML === html) return;
-  if (reducedMotion() || !el.isConnected) {
-    el.innerHTML = html;
-    return;
-  }
-  const w0 = el.getBoundingClientRect().width;
-  el.style.width = "";
-  el.innerHTML = html;
-  const w1 = el.getBoundingClientRect().width;
-  if (Math.abs(w1 - w0) < 1) return;
-  el.style.width = `${w0}px`;
-  void el.offsetWidth;
-  el.classList.add("is-morph");
-  el.style.width = `${w1}px`;
-  const done = () => {
-    el.style.width = "";
-    el.classList.remove("is-morph");
-    el.removeEventListener("transitionend", done);
-  };
-  el.addEventListener("transitionend", done);
-  window.setTimeout(done, 400);
+/** "+1.2%" / "−0.7%" / "0.0%" (sister app changeText). */
+export function changeText(ch: number): string {
+  const r = (ch * 100).toFixed(1);
+  const v = Number(r);
+  return v > 0 ? "+" + r + "%" : v < 0 ? "−" + r.slice(1) + "%" : "0.0%";
 }
 
-/** Place a popover under its anchor, inside the container; on phones CSS turns it into a bottom sheet. */
-export function placePopover(pop: HTMLElement, anchor: HTMLElement, container: HTMLElement): void {
-  const a = anchor.getBoundingClientRect(), c = container.getBoundingClientRect();
-  const w = pop.offsetWidth || 320;
-  let left = a.left - c.left;
-  left = Math.max(0, Math.min(left, c.width - w));
-  pop.style.left = `${left}px`;
-  pop.style.top = `${a.bottom - c.top + 10}px`;
-  pop.style.setProperty("--ox", `${Math.max(16, Math.min(w - 16, a.left - c.left - left + a.width / 2))}px`);
+/** Countdown ring inside Confirm (sister app src/ui/views.ts ringHtml). */
+export function ringHtml(secs: number, total: number): string {
+  const C = 2 * Math.PI * 11;
+  const off = C * (1 - Math.max(0, Math.min(total, secs)) / total);
+  return `<span class="x-ring" aria-label="Prices refresh in ${secs} seconds"><svg viewBox="0 0 26 26" aria-hidden="true"><circle cx="13" cy="13" r="11" class="x-ring__bg"/><circle cx="13" cy="13" r="11" class="x-ring__fg" stroke-dasharray="${C.toFixed(2)}" stroke-dashoffset="${off.toFixed(2)}"/></svg><b>${secs}</b></span>`;
 }
 
-/** Close on Escape / outside click; returns a disposer. */
+/** Payoff bars (sister app chartSvg): `pts` are price/profit pairs across the range. */
+export function chartSvg(pts: { x: number; pl: number }[], label: (p: { x: number; pl: number }) => string): string {
+  const maxUp = Math.max(1e-9, ...pts.map((p) => p.pl));
+  const maxDn = Math.max(1e-9, ...pts.map((p) => -p.pl));
+  const H = 160, mid = H * (maxUp / (maxUp + maxDn)), bw = 600 / pts.length;
+  const bars = pts
+    .map((p, i) => {
+      const hgt = Math.max(3, p.pl >= 0 ? (p.pl / maxUp) * (mid - 6) : (-p.pl / maxDn) * (H - mid - 6));
+      const y = p.pl >= 0 ? mid - hgt : mid;
+      return `<rect data-i="${i}" style="--i:${i}" x="${(i * bw + 4).toFixed(1)}" y="${y.toFixed(1)}" width="${(bw - 8).toFixed(1)}" height="${hgt.toFixed(1)}" rx="7" class="${p.pl >= 0 ? "is-up" : "is-dn"}" tabindex="0" aria-label="${label(p)}"></rect>`;
+    })
+    .join("");
+  return `<svg viewBox="0 0 600 ${H}" role="img" aria-label="Profit or loss by price at expiry">${bars}<line x1="0" x2="600" y1="${mid.toFixed(1)}" y2="${mid.toFixed(1)}" stroke="#151515" stroke-width="2"/></svg>`;
+}
+
+/** Price labels under the chart, under the bars they describe: the range ends and both strikes (sister app axisHtml). */
+export function axisHtml(from: number, to: number, lo: number, hi: number, n: number, fmt: (x: number) => string): string {
+  const at = (x: number) => ((((x - from) / (to - from)) * (n - 1) + 0.5) / n) * 100;
+  return (
+    `<div class="x-axis" aria-hidden="true"><span style="left:0">${fmt(from)}</span>` +
+    `<span class="is-mid" style="left:${at(lo).toFixed(1)}%">${fmt(lo)}</span><span class="is-mid" style="left:${at(hi).toFixed(1)}%">${fmt(hi)}</span>` +
+    `<span style="right:0">${fmt(to)}</span></div>`
+  );
+}
+
+/** Place a popover under its pill inside the builder (sister app openPop), then spring it in. */
+export function placePopover(pop: HTMLElement, anchor: HTMLElement, container: HTMLElement): number {
+  const br = container.getBoundingClientRect(), r = anchor.getBoundingClientRect(), w = pop.offsetWidth;
+  const left = Math.max(0, Math.min(r.left - br.left, document.documentElement.clientWidth - 20 - br.left - w));
+  pop.style.left = left + "px";
+  pop.style.top = r.bottom - br.top + 8 + "px";
+  return r.left - br.left - left + Math.min(r.width, w) / 2;
+}
+
+/** Close on Escape / outside pointer; returns a disposer. */
 export function dismissable(pop: HTMLElement, anchor: HTMLElement, close: () => void): () => void {
   const onKey = (e: KeyboardEvent) => {
     if (e.key === "Escape") {
@@ -111,11 +117,4 @@ export function dismissable(pop: HTMLElement, anchor: HTMLElement, close: () => 
     document.removeEventListener("keydown", onKey);
     document.removeEventListener("pointerdown", onDown, true);
   };
-}
-
-/** Countdown ring (SVG) for the quote freshness. `frac` 0..1 remaining. */
-export function ring(frac: number, label: string): string {
-  const r = 10, C = 2 * Math.PI * r;
-  const f = Math.max(0, Math.min(1, frac));
-  return `<span class="x-ring" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="${r}" fill="none" stroke="currentColor" stroke-opacity=".3" stroke-width="2"/><circle cx="12" cy="12" r="${r}" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="${C.toFixed(2)}" stroke-dashoffset="${(C * (1 - f)).toFixed(2)}" transform="rotate(-90 12 12)" stroke-linecap="round"/></svg><b>${label}</b></span>`;
 }
