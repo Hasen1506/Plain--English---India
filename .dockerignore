@@ -1,0 +1,14 @@
+node_modules
+dist
+dist-e2e
+test-results
+playwright-report
+tests
+web
+docs
+.git
+.github
+.env
+.env.*
+gateway/data
+.e2e-gw-data
