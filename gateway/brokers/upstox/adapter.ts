@@ -286,7 +286,7 @@ export class UpstoxAdapter implements BrokerAdapter {
       auth: "order",
       headers,
       body: {
-        quantity: o.qty,
+        quantity: o.lots ?? o.qty, // commodity/currency: Upstox takes a number of lots
         product: o.product,
         validity: o.validity,
         price: o.limit,
