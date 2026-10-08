@@ -225,7 +225,7 @@ export async function createDemo() {
       }
       case "POST /api/margin":
       case "POST /api/charges/broker":
-        return bad("demo", "not available in the demo (no broker)", 503);
+        return bad("demo", "no broker in the demo", 503);
       case "PUT /api/risk": {
         risk = sanitizeRiskConfig(body as never, risk);
         log("risk.config");
