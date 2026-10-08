@@ -15,9 +15,10 @@ export function alignToTick(price: number, tickPaise: number, mode: Round): numb
 }
 
 export function isOnTick(price: number, tickPaise: number): boolean {
-  if (!Number.isFinite(price) || !(price > 0)) return false;
-  const paise = Math.round(price * 100);
-  return Math.abs(price * 100 - paise) < 1e-6 && paise % tickPaise === 0;
+  if (!Number.isFinite(price) || !(price > 0) || !(tickPaise > 0)) return false;
+  // in 1/100 paise so fractional ticks (USDINR options: 0.25 paise) work too
+  const u = Math.round(price * 1e4), t = Math.round(tickPaise * 100);
+  return Math.abs(price * 1e4 - u) < 1e-4 && t > 0 && u % t === 0;
 }
 
 export type QtyProblem = "not-integer" | "not-positive" | "not-lot-multiple";

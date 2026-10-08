@@ -1,5 +1,8 @@
 // DEMO MODE: the whole UI runs in the browser against the recorded public fixtures
-// (NSE option chains and the Upstox instrument master, recorded Thu 8 Oct 2026 ~10:39 IST).
+// (NSE option chains and the Upstox instrument master, recorded Thu 8 Oct 2026 ~10:39 IST;
+// MCX option chains from mcxindia.com and the Upstox MCX/currency master, 16:13–16:14 IST the same day).
+// NSE currency option prices could not be recorded (the public chain was empty), so currency
+// pairs list their real contracts with "No recorded currency prices in the demo".
 // There is no broker and no gateway: every trade is a PAPER trade on recorded prices,
 // and the UI labels this everywhere. Live mode is refused here as well as in the UI.
 //
@@ -7,14 +10,16 @@
 // store, paper broker, leg execution with unwind, risk checks, charges), so the demo
 // exercises the real logic. Data is loaded lazily, only when the demo starts.
 
-import { InstrumentStore, INDICES, type Instrument } from "../src/core/instruments.ts";
-import { HolidayCalendar, marketSession } from "../src/core/calendar.ts";
-import { makeQuote, type Chain, type Quote } from "../src/core/chain.ts";
+import { InstrumentStore, INDICES, derivDef, venueOf, type Instrument, type Venue } from "../src/core/instruments.ts";
+import { HolidayCalendar, marketSession, venueSession, optionExpiryMs } from "../src/core/calendar.ts";
+import { underlyingList } from "../src/core/catalog.ts";
+import { quotesFromMcx, type McxChainRecord } from "../src/core/recorded-mcx.ts";
+import { makeQuote, chainFromQuotes, type Chain, type Quote } from "../src/core/chain.ts";
 import { PaperBroker, emptyPaper, unrealised } from "../src/core/paper.ts";
 import { executeLegs, closePosition, type ExecDeps, type PlaceRequest, type UnwindResult } from "../src/core/execution.ts";
-import { checkOrder, DEFAULT_RISK, sanitizeRiskConfig, REAL_MONEY_PHRASE, type OrderIntent, type RiskState } from "../src/core/risk.ts";
+import { checkOrder, DEFAULT_RISK, sanitizeRiskConfig, REAL_MONEY_PHRASE, LIVE_BLOCKED, type OrderIntent, type RiskState } from "../src/core/risk.ts";
 import { protectiveLimit, alignToTick } from "../src/core/rules.ts";
-import { charges, sumCharges } from "../src/core/charges.ts";
+import { charges, sumCharges, derivChargeSegment } from "../src/core/charges.ts";
 import { legsPayoff } from "../src/core/strategy.ts";
 import { istDate, istMs } from "../src/core/ist.ts";
 import { round2 } from "../src/core/money.ts";
@@ -50,8 +55,10 @@ const started = Date.now();
 const now = (): number => RECORDED_AT + Math.min(Date.now() - started, 4 * 3600_000);
 
 async function loadData() {
-  const [inst, hol, idx, n13, n27, bn, fn, rel] = await Promise.all([
+  const [inst, instMcx, mcx, hol, idx, n13, n27, bn, fn, rel] = await Promise.all([
     import("../tests/fixtures/upstox-instruments.json"),
+    import("../tests/fixtures/upstox-instruments-mcx-cds.json"),
+    import("../tests/fixtures/mcx-chains.json"),
     import("../tests/fixtures/upstox-holidays.json"),
     import("../tests/fixtures/nse-indices.json"),
     import("../tests/fixtures/nse-chain-NIFTY-13-Oct-2026.json"),
@@ -62,7 +69,8 @@ async function loadData() {
   ]);
   const d = <T>(m: unknown): T => ((m as { default?: T }).default ?? m) as T;
   return {
-    rows: d<{ rows: Record<string, unknown>[] }>(inst).rows,
+    rows: [...d<{ rows: Record<string, unknown>[] }>(inst).rows, ...d<{ rows: Record<string, unknown>[] }>(instMcx).rows],
+    mcx: d<{ chains: Record<string, McxChainRecord> }>(mcx).chains,
     holidays: d<{ body: { data: Parameters<typeof HolidayCalendar.fromUpstox>[0] } }>(hol).body.data,
     indices: d<{ data: { index: string; last: number }[] }>(idx).data,
     chains: { NIFTY: [d<NseChain>(n13), d<NseChain>(n27)], BANKNIFTY: [d<NseChain>(bn)], FINNIFTY: [d<NseChain>(fn)], RELIANCE: [d<NseChain>(rel)] } as Record<string, NseChain[]>,
@@ -112,6 +120,36 @@ export async function createDemo() {
     const k = store.spotKey(u);
     if (k) quotes.set(k, { ltp: v, bid: null, ask: null, bidQty: 0, askQty: 0, iv: null, oi: null });
   }
+  // MCX: the recorded public MCX option chains (options + the futures they are written on)
+  const mcxQuotes = new Map<string, Map<string, Omit<Quote, "ts">>>();
+  for (const [k, rec] of Object.entries(data.mcx)) {
+    const [u, date] = k.split(":") as [string, string];
+    const m = quotesFromMcx(u, date, rec, store, now(), 0);
+    mcxQuotes.set(k, m);
+    for (const [key, q] of m) quotes.set(key, q);
+    const near = store.futuresOf(u, now())[0];
+    if (near && store.pricingKey(u, date, now()) === near.key && rec.underlyingValue) spotOf.set(u, rec.underlyingValue);
+  }
+  for (const k of Object.keys(data.mcx)) {
+    const u = k.split(":")[0]!;
+    if (!spotOf.has(u)) {
+      // the nearest future had no option on it today: show the price of the future the first recorded expiry is written on
+      const date = k.split(":")[1]!;
+      const pk = store.pricingKey(u, date, now());
+      const v = pk ? quotes.get(pk)?.ltp : null;
+      if (v) spotOf.set(u, v);
+    }
+  }
+  const mcxChain = (u: string, expiry: string): Chain | null => {
+    const m = mcxQuotes.get(`${u}:${expiry}`);
+    const rec = data.mcx[`${u}:${expiry}`];
+    if (!m || !rec?.underlyingValue) return null;
+    const insts = store.chain(u, expiry);
+    const q: Record<string, Quote> = {};
+    for (const [k, x] of m) q[k] = { ...x, ts: now() };
+    return chainFromQuotes({ underlying: u, expiryDate: expiry, expiryMs: optionExpiryMs("MCX_FO", expiry), spot: rec.underlyingValue, insts, quotes: q, fetchedAt: now(), source: `Recorded MCX option chain, Thu 8 Oct 2026 ${rec.asOn.slice(11)}` });
+  };
+
   // the one stock with a recorded price: RELIANCE (its option chain's underlying value; no order book)
   const rel = store.equity("RELIANCE");
   if (rel && spotOf.has("RELIANCE")) quotes.set(rel.key, { ltp: spotOf.get("RELIANCE")!, bid: null, ask: null, bidQty: 0, askQty: 0, iv: null, oi: null });
@@ -121,7 +159,7 @@ export async function createDemo() {
     return q ? { ...q, ts: now() } : null;
   };
   const paper = new PaperBroker(emptyPaper(), (k) => store.get(k), async (k) => quote(k), now);
-  const session = (inst: Pick<Instrument, "exchange" | "type">) => marketSession(now(), inst.exchange, cal, inst.type === "EQ" ? "EQ" : "FO");
+  const session = (inst: Pick<Instrument, "exchange" | "type" | "segment">) => venueSession(now(), venueOf(inst), cal);
 
   const riskState = (): RiskState => {
     const netQtyByKey: Record<string, number> = {};
@@ -149,7 +187,7 @@ export async function createDemo() {
         const inst = store.get(r.instrumentKey);
         if (r.purpose !== "entry") rs = riskState();
         const intent: OrderIntent = { instrumentKey: r.instrumentKey, side: r.side, qty: r.qty, orderType: "LIMIT", limitPrice: r.limit, product: r.product, purpose: r.purpose };
-        const res = checkOrder(intent, { config: risk, state: rs, inst, quote: quote(r.instrumentKey), session: session(inst ?? { exchange: "NSE", type: "CE" }), now: now(), tradeWorstLoss: r.purpose === "entry" ? tradeWorstLoss : undefined });
+        const res = checkOrder(intent, { config: risk, state: rs, inst, quote: quote(r.instrumentKey), session: session(inst ?? { exchange: "NSE", type: "CE", segment: "NSE_FO" }), now: now(), tradeWorstLoss: r.purpose === "entry" ? tradeWorstLoss : undefined });
         if (!res.ok) log(`risk.block ${res.code}`);
         return res;
       },
@@ -180,6 +218,7 @@ export async function createDemo() {
       case "GET /api/session": {
         const t = now();
         const markets = (["NSE", "BSE"] as const).flatMap((ex) => (["FO", "EQ"] as const).map((m) => ({ ...marketSession(t, ex, cal, m), market: m, label: "Recorded session · 8 Oct 2026 10:39 IST" })));
+        const venues = (["NFO", "BFO", "NSE", "BSE", "MCX", "CDS"] as Venue[]).map((v) => ({ venue: v, ...venueSession(t, v, cal), label: v === "MCX" ? "Recorded · MCX 8 Oct 2026 16:13–16:14 IST" : "Recorded session · 8 Oct 2026 10:39 IST" }));
         return {
           now: t,
           demo: true,
@@ -190,21 +229,27 @@ export async function createDemo() {
           instruments: { count: store.size, loadedAt: RECORDED_AT },
           holidays: { source: "Recorded Upstox holiday list" },
           markets,
+          venues,
+          liveBlocked: LIVE_BLOCKED,
           confirmPhrase: REAL_MONEY_PHRASE,
         };
       }
       case "GET /api/instruments/underlyings":
         return {
           loadedAt: RECORDED_AT,
-          underlyings: store.optionUnderlyings().map((u) => {
-            const idx = INDICES.find((dd) => dd.id === u);
-            return { id: u, label: idx?.label ?? u, index: Boolean(idx), exchange: idx?.exchange ?? "NSE", lotSize: store.lotSize(u), spotKey: store.spotKey(u), expiries: store.expiries(u, now()) };
-          }),
+          underlyings: underlyingList(store, now()),
         };
       case "GET /api/instruments/equity":
         return { results: store.searchEquity(q.get("q") ?? "", 8) };
       case "GET /api/chain": {
         const u = q.get("u") ?? "", e = q.get("expiry") ?? "";
+        const dd = derivDef(u);
+        if (dd?.category === "currency") bad("no-recording", "No recorded currency prices in the demo (the public NSE currency option chain was empty when we recorded)", 404);
+        if (dd) {
+          const mc = mcxChain(u, e);
+          if (!mc) bad("no-recording", `No recorded ${dd.label} prices for this expiry in the demo. Recorded: the two nearest MCX option expiries of each commodity, 8 Oct 2026 16:13–16:14 IST.`, 404);
+          return mc;
+        }
         const c = chainOf(u, e);
         if (!c) bad("no-recording", `The demo has no recorded option chain for ${INDICES.find((x) => x.id === u)?.label ?? u} on this expiry. Recorded: Nifty 13 & 27 Oct, Bank Nifty, Fin Nifty and Reliance 27 Oct.`, 404);
         return c;
@@ -252,7 +297,7 @@ export async function createDemo() {
         const ks = legs.map((l) => l.inst.strike!);
         const pay = legs.map((l) => ({ inst: l.inst, side: l.side, qty: l.qty, price: l.limit }));
         const worstPay = Math.min(...[0.01, ...ks, Math.max(...ks) * 10].map((S) => legsPayoff(pay, S)));
-        const ch = sumCharges(legs.map((l) => charges({ segment: "OPT", exchange: l.inst.exchange, side: l.side, qty: l.qty, price: l.limit, date: istDate(now()) })));
+        const ch = sumCharges(legs.map((l) => charges({ segment: derivChargeSegment(l.inst), exchange: l.inst.exchange, side: l.side, qty: l.qty, price: l.limit, date: istDate(now()) })));
         const worst = round2(Math.max(0, -worstPay) + ch.total);
         log("trade.start (paper)");
         const res = await executeLegs(legs, deps(worst, "D", `demo-${now().toString(36)}`));

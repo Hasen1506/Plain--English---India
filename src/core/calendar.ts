@@ -17,7 +17,7 @@
 //   (NSE contract specifications).
 
 import { addDays, istDate, istMs, istParts, weekday, daysInMonth } from "./ist.ts";
-import type { Exchange } from "./instruments.ts";
+import type { Exchange, Venue } from "./instruments.ts";
 
 export interface Holiday {
   date: string;
@@ -26,12 +26,21 @@ export interface Holiday {
   special?: { venue: string; start: number; end: number }[]; // e.g. Muhurat trading; venue NSE/BSE (equity) or NFO/BFO (F&O)
 }
 
+/** Per-venue view of one holiday-list date (MCX and CDS): which venues are shut, and any session windows. */
+export interface VenueDay {
+  description: string;
+  closed: string[]; // Upstox closed_exchanges (NSE, NFO, CDS, BSE, BFO, BCD, MCX, NSCOM)
+  open: { venue: string; start: number; end: number }[]; // open_exchanges windows
+}
+
 export class HolidayCalendar {
   private readonly byDate = new Map<string, Holiday>();
+  readonly venueDays = new Map<string, VenueDay>();
   readonly source: string;
-  constructor(list: Holiday[], source: string) {
+  constructor(list: Holiday[], source: string, venueDays?: Map<string, VenueDay>) {
     for (const h of list) this.byDate.set(h.date, h);
     this.source = source;
+    if (venueDays) for (const [k, v] of venueDays) this.venueDays.set(k, v);
   }
 
   /** From Upstox GET /v2/market/holidays `data`. NFO/BFO closures count as F&O closures of NSE/BSE. */
@@ -48,7 +57,9 @@ export class HolidayCalendar {
         .map((o) => ({ venue: o.exchange, start: o.start_time, end: o.end_time }));
       if (closed.length || special.length) list.push({ date: d.date, description: d.description, closed, special: special.length ? special : undefined });
     }
-    return new HolidayCalendar(list, "Upstox market holidays API");
+    const vd = new Map<string, VenueDay>();
+    for (const d of data) vd.set(d.date, { description: d.description, closed: [...d.closed_exchanges], open: (d.open_exchanges ?? []).map((o) => ({ venue: o.exchange, start: o.start_time, end: o.end_time })) });
+    return new HolidayCalendar(list, "Upstox market holidays API", vd);
   }
 
   /** From NSE holiday-master `FO` (or `CM`) array: { tradingDate: "20-Oct-2026", description }. NSE-only. */
@@ -127,6 +138,72 @@ export function marketSession(now: number, ex: Exchange, cal: HolidayCalendar, m
   return { exchange: ex, state: "closed", canTrade: false, label: "Market closed", opensAt: nextOpen(), closesAt: null };
 }
 
+// ── MCX commodities and NSE currency derivatives ──
+//   MCX non-agri (metals, energy): 09:00 to 23:30 IST while US daylight saving is on, 09:00 to 23:55
+//   otherwise (MCX circulars MCX/TRD/068/2026: 23:30 from 9 Mar 2026; MCX/TRD/550/2026: 23:55 from
+//   2 Nov 2026 to 12 Mar 2027). US DST runs from the second Sunday of March to the first Sunday of
+//   November, so the first Indian trading day after each switch follows it.
+//   NSE currency derivatives (CDS): 09:00 to 17:00 IST.
+//   Holidays and special sessions per venue come from the Upstox holiday list (closed_exchanges /
+//   open_exchanges, e.g. MCX evening-only sessions on some exchange holidays).
+
+/** True when US daylight saving is in force on this IST calendar date (2nd Sun of March ≤ d < 1st Sun of November). */
+export function usDst(date: string): boolean {
+  const y = Number(date.slice(0, 4));
+  const nthSunday = (m: number, n: number) => {
+    const first = `${y}-${String(m).padStart(2, "0")}-01`;
+    return addDays(first, ((7 - weekday(first)) % 7) + 7 * (n - 1));
+  };
+  return date >= nthSunday(3, 2) && date < nthSunday(11, 1);
+}
+
+/** Regular trading window (minutes since IST midnight) of a venue on a date. */
+export function venueHours(venue: Venue, date: string): { open: number; close: number } {
+  if (venue === "MCX") return { open: 9 * 60, close: usDst(date) ? 23 * 60 + 30 : 23 * 60 + 55 };
+  if (venue === "CDS") return { open: 9 * 60, close: 17 * 60 };
+  return { open: OPEN_MIN, close: CLOSE_MIN };
+}
+
+const hhmm = (min: number): string => `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
+const VENUE_EX: Record<Venue, Exchange> = { NSE: "NSE", BSE: "BSE", NFO: "NSE", BFO: "BSE", MCX: "MCX", CDS: "NSE" };
+
+/** Market session for any venue. NSE/BSE/NFO/BFO use marketSession(); MCX and CDS use their own hours and the per-venue holiday list. */
+export function venueSession(now: number, venue: Venue, cal: HolidayCalendar): MarketSession {
+  if (venue === "NSE" || venue === "BSE") return marketSession(now, venue, cal, "EQ");
+  if (venue === "NFO" || venue === "BFO") return marketSession(now, venue === "NFO" ? "NSE" : "BSE", cal, "FO");
+  const ex = VENUE_EX[venue];
+  const name = venue === "MCX" ? "MCX" : "Currency";
+  const dayState = (date: string): { closed: boolean; window: { start: number; end: number } | null; why: string | null } => {
+    const wd = weekday(date);
+    const vd = cal.venueDays.get(date);
+    const win = vd?.open.find((o) => o.venue === venue) ?? null;
+    if (vd && vd.closed.includes(venue)) return { closed: !win, window: win, why: vd.description };
+    if (win) return { closed: false, window: win, why: vd!.description };
+    if (wd === 0 || wd === 6) return { closed: true, window: null, why: null };
+    const h = venueHours(venue, date);
+    return { closed: false, window: { start: istMs(date, Math.floor(h.open / 60), h.open % 60), end: istMs(date, Math.floor(h.close / 60), h.close % 60) }, why: null };
+  };
+  const date = istDate(now);
+  const next = (): number | null => {
+    let d = date;
+    for (let i = 0; i < 15; i++) {
+      const st = dayState(d);
+      if (!st.closed && st.window && st.window.start > now) return st.window.start;
+      d = addDays(d, 1);
+    }
+    return null;
+  };
+  const st = dayState(date);
+  const p = istParts(now);
+  if (st.window && now >= st.window.start && now < st.window.end) {
+    const close = istParts(st.window.end);
+    return { exchange: ex, state: st.why ? "special" : "open", canTrade: true, label: `${name} open till ${hhmm(close.minutes)}`, opensAt: null, closesAt: st.window.end, holiday: st.why ?? undefined };
+  }
+  if (p.wd === 0 || p.wd === 6) return { exchange: ex, state: "weekend", canTrade: false, label: `${name} closed for the weekend`, opensAt: next(), closesAt: null };
+  if (st.closed && st.why) return { exchange: ex, state: "holiday", canTrade: false, label: `${name} holiday: ${st.why}`, opensAt: next(), closesAt: null, holiday: st.why };
+  return { exchange: ex, state: "closed", canTrade: false, label: `${name} closed`, opensAt: next(), closesAt: null };
+}
+
 // ── rule-based expiry generator (reference implementation for differential tests) ──
 
 export interface ExpiryRule {
@@ -179,4 +256,17 @@ export function ruleExpiries(underlying: string, fromDate: string, months: numbe
     }
   }
   return out;
+}
+
+/**
+ * When an option expiry stops trading (IST): equity F&O 15:30; MCX at the venue close that day
+ * (23:30 or 23:55); NSE currency options at 12:30 (NSE currency derivatives contract specs).
+ */
+export function optionExpiryMs(segment: string, date: string): number {
+  if (segment === "MCX_FO") {
+    const c = venueHours("MCX", date).close;
+    return istMs(date, Math.floor(c / 60), c % 60);
+  }
+  if (segment === "NCD_FO") return istMs(date, 12, 30);
+  return istMs(date, 15, 30);
 }

@@ -25,7 +25,7 @@ export interface RiskConfig {
 export const DEFAULT_RISK: RiskConfig = {
   perTradeCap: null,
   dailyLossCap: null,
-  allowedSegments: ["NSE_FO", "BSE_FO", "NSE_EQ", "BSE_EQ"],
+  allowedSegments: ["NSE_FO", "BSE_FO", "NSE_EQ", "BSE_EQ", "MCX_FO", "NCD_FO"],
   maxOrdersPerSecond: 5,
   maxSlippage: 0.03,
   maxExitSlippage: 0.25,
@@ -150,3 +150,14 @@ export function sanitizeRiskConfig(input: Partial<Record<keyof RiskConfig, unkno
 export function confirmPhraseOk(typed: unknown): boolean {
   return typeof typed === "string" && typed.trim().toUpperCase() === REAL_MONEY_PHRASE;
 }
+
+/**
+ * Segments that never go live from this app, even with LIVE_TRADING_ENABLED, and why.
+ * MCX: Upstox's order API answers UDAPI1161 "MCX orders via API are temporarily disabled"
+ * (https://upstox.com/developer/api-documentation/v3/place-order/, read 8 Oct 2026).
+ * NSE currency: not yet verified against Upstox's order API, so paper only until it is.
+ */
+export const LIVE_BLOCKED: Partial<Record<Segment, string>> = {
+  MCX_FO: "Commodity trades are paper only: Upstox has disabled MCX orders through its API (UDAPI1161, \"MCX orders via API are temporarily disabled\").",
+  NCD_FO: "Currency trades are paper only: live currency orders through the Upstox API are not verified in this app yet.",
+};

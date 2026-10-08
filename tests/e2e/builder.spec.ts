@@ -39,7 +39,8 @@ test("@mobile every pill opens a popover; choices update the sentence, summary a
   await inViewport(page);
   await pop(page).getByRole("button", { name: /stays below/ }).click();
   await expect(page.getByRole("button", { name: "Direction" })).toHaveText(/stays below/);
-  await expect(page.getByTestId("suggestion")).toContainText("Bear call spread");
+  await expect(page.getByTestId("strategy")).toContainText("Bear call spread");
+  await expect(page.getByTestId("suggestion")).toContainText(/Sell NIFTY \d+ CE/);
 
   // level: type it, see % from spot and the chance
   await page.getByRole("button", { name: "Level" }).click();

@@ -35,7 +35,7 @@ export interface GatewayConfig {
 
 export class ConfigError extends Error {}
 
-const SEGMENTS: Segment[] = ["NSE_EQ", "BSE_EQ", "NSE_FO", "BSE_FO"];
+const SEGMENTS: Segment[] = ["NSE_EQ", "BSE_EQ", "NSE_FO", "BSE_FO", "MCX_FO", "NCD_FO"];
 
 export function loadConfig(env: Record<string, string | undefined>): GatewayConfig {
   const need = (k: string): string => {
@@ -51,7 +51,7 @@ export function loadConfig(env: Record<string, string | undefined>): GatewayConf
   if (!passphraseHash.startsWith("scrypt$")) throw new ConfigError("GATEWAY_PASSPHRASE_HASH must come from `npm run gateway:hash`");
   const ops = Number(env.RISK_MAX_ORDERS_PER_SEC ?? DEFAULT_RISK.maxOrdersPerSecond);
   if (!(ops >= 1 && ops <= OPS_HARD_LIMIT)) throw new ConfigError(`RISK_MAX_ORDERS_PER_SEC must be 1…${OPS_HARD_LIMIT} (SEBI retail threshold is 10/s)`);
-  const segs = (env.ALLOWED_SEGMENTS ?? "NSE_FO,BSE_FO,NSE_EQ,BSE_EQ").split(",").map((s) => s.trim()).filter(Boolean) as Segment[];
+  const segs = (env.ALLOWED_SEGMENTS ?? "NSE_FO,BSE_FO,NSE_EQ,BSE_EQ,MCX_FO,NCD_FO").split(",").map((s) => s.trim()).filter(Boolean) as Segment[];
   for (const s of segs) if (!SEGMENTS.includes(s)) throw new ConfigError(`ALLOWED_SEGMENTS: unknown segment ${s}`);
   const liveTrading = env.LIVE_TRADING_ENABLED === "1";
   const fakeNow = env.GATEWAY_FAKE_NOW ? Number(env.GATEWAY_FAKE_NOW) : null;

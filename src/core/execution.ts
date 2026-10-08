@@ -25,6 +25,7 @@ export interface PlaceRequest {
   validity: "IOC" | "DAY";
   tag: string;
   purpose: Purpose;
+  lots?: number; // set for instruments the broker sizes in lots (MCX, NSE currency)
 }
 
 export type OrderState = "complete" | "rejected" | "cancelled" | "open" | "pending";
@@ -35,6 +36,9 @@ export interface OrderStatus {
   avgPrice: number | null;
   message?: string;
 }
+
+/** Lot count for brokers that size commodity/currency orders in lots (Upstox). */
+const lotsOf = (inst: Pick<Instrument, "qtyInLots" | "lotSize">, qty: number): { lots?: number } => (inst.qtyInLots ? { lots: Math.round(qty / inst.lotSize) } : {});
 
 export interface ExecBroker {
   place(r: PlaceRequest): Promise<{ ok: true; orderIds: string[] } | { ok: false; error: string }>;
@@ -147,7 +151,7 @@ export async function executeLegs(input: ExecLeg[], d: ExecDeps): Promise<ExecRe
       results.push({ inst: leg.inst, side: leg.side, requested: 0, filled: 0, avgPrice: null, orderIds: [], error: "not sent: an earlier leg did not fill" });
       continue;
     }
-    const r = await placeAndSettle({ instrumentKey: leg.inst.key, side: leg.side, qty: want, limit: leg.limit, product: d.product, validity: "IOC", tag: d.tag, purpose: "entry" }, d);
+    const r = await placeAndSettle({ instrumentKey: leg.inst.key, ...lotsOf(leg.inst, want), side: leg.side, qty: want, limit: leg.limit, product: d.product, validity: "IOC", tag: d.tag, purpose: "entry" }, d);
     const filled = floorLot(Math.min(r.filled, want), leg.inst.lotSize);
     results.push({ inst: leg.inst, side: leg.side, requested: want, filled, avgPrice: r.avgPrice, orderIds: r.orderIds, error: r.error });
     log.push(`${leg.side} ${want} ${leg.inst.symbol} @ ≤${leg.limit}: filled ${filled}${r.error ? ` (${r.error})` : ""}`);
@@ -171,7 +175,7 @@ export async function executeLegs(input: ExecLeg[], d: ExecDeps): Promise<ExecRe
     while (left > 0 && attempts < maxAttempts) {
       attempts++;
       const limit = await d.unwindLimit(r.inst, side, attempts);
-      const u = await placeAndSettle({ instrumentKey: r.inst.key, side, qty: left, limit, product: d.product, validity: "IOC", tag: d.tag, purpose: "unwind" }, d);
+      const u = await placeAndSettle({ instrumentKey: r.inst.key, ...lotsOf(r.inst, left), side, qty: left, limit, product: d.product, validity: "IOC", tag: d.tag, purpose: "unwind" }, d);
       const f = Math.min(u.filled, left);
       filledTotal += f;
       if (f > 0 && u.avgPrice !== null) notional += f * u.avgPrice;
@@ -201,7 +205,7 @@ export async function closePosition(inst: Instrument, netQty: number, d: ExecDep
   while (left > 0 && attempts < maxAttempts) {
     attempts++;
     const limit = await d.unwindLimit(inst, side, attempts);
-    const u = await placeAndSettle({ instrumentKey: inst.key, side, qty: left, limit, product: d.product, validity: "IOC", tag: d.tag, purpose: "exit" }, d);
+    const u = await placeAndSettle({ instrumentKey: inst.key, ...lotsOf(inst, left), side, qty: left, limit, product: d.product, validity: "IOC", tag: d.tag, purpose: "exit" }, d);
     const f = Math.min(u.filled, left);
     filled += f;
     if (f > 0 && u.avgPrice !== null) notional += f * u.avgPrice;

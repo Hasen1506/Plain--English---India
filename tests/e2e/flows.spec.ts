@@ -52,9 +52,9 @@ test("headline sentence → bull put spread → review → paper trade fills aga
   await expect(page.getByTestId("chain-meta")).toContainText("Live");
   await expect(page.getByTestId("spot")).toHaveText(/22,4\d\d/);
   const sug = page.getByTestId("suggestion");
-  await expect(sug).toContainText("Bull put spread");
-  await expect(sug).toContainText("SELL");
-  await expect(sug).toContainText("22300 PE");
+  await expect(page.getByTestId("strategy")).toContainText("Bull put spread");
+  await expect(sug).toContainText("Sell NIFTY 22300 PE");
+  await expect(sug).toContainText("Buy NIFTY 22200 PE");
   await expect(page.getByTestId("summary")).toContainText(/It risks ₹[\d,]+ · \d+% chance of profit/);
   const maxLoss = Number((await sug.getByTestId("max-loss").textContent())!.replace(/[^\d.]/g, ""));
   expect(maxLoss).toBeLessThanOrEqual(5000);
@@ -198,7 +198,8 @@ test("@mobile headline flow fits a phone", async ({ page }) => {
   await signIn(page);
   await brokerLogin(page);
   await headline(page);
-  await expect(page.getByTestId("suggestion")).toContainText("Bull put spread");
+  await expect(page.getByTestId("strategy")).toContainText("Bull put spread");
+  await expect(page.getByTestId("suggestion")).toContainText("Sell NIFTY 22300 PE");
   await noHorizontalOverflow(page);
   // every dock tab is fully on screen (no "Optio…" / "S…" cut-offs)
   const vw = page.viewportSize()!.width;

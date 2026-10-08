@@ -66,7 +66,7 @@ describe("gateway configuration", () => {
     [{ CORS_ORIGINS: "" }, /CORS_ORIGINS/],
     [{ RISK_MAX_ORDERS_PER_SEC: "10" }, /1…9/],
     [{ BROKER: "zerodha" }, /stub/],
-    [{ ALLOWED_SEGMENTS: "MCX_FO" }, /unknown segment/],
+    [{ ALLOWED_SEGMENTS: "NSE_COM" }, /unknown segment/],
     [{ GATEWAY_FAKE_NOW: "1", NODE_ENV: "test" }, /tests only/], // real Upstox URLs → refused
     [{ UPSTOX_API_SECRET: "" }, /UPSTOX_API_SECRET/],
   ])("refuses %j", (over, re) => {

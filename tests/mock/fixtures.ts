@@ -8,6 +8,7 @@ import { InstrumentStore, type Instrument } from "../../src/core/instruments.ts"
 import { HolidayCalendar } from "../../src/core/calendar.ts";
 import { istMs, istDate } from "../../src/core/ist.ts";
 import { makeQuote, type Chain } from "../../src/core/chain.ts";
+import type { McxChainRecord } from "../../src/core/recorded-mcx.ts";
 
 const DIR = join(import.meta.dirname, "..", "fixtures");
 const cache = new Map<string, unknown>();
@@ -28,7 +29,9 @@ export function chainTime(file = "nse-chain-NIFTY-13-Oct-2026.json"): number {
 export const FIXTURE_NOW = chainTime();
 
 export type UpstoxRow = Record<string, unknown>;
-export const upstoxRows = (): UpstoxRow[] => fixture<{ rows: UpstoxRow[] }>("upstox-instruments.json").rows;
+/** NSE/BSE rows (recorded 10:39 IST) plus the MCX metals/energy and NSE currency rows (recorded ~16:13 IST, same day). */
+export const upstoxRows = (): UpstoxRow[] => [...fixture<{ rows: UpstoxRow[] }>("upstox-instruments.json").rows, ...fixture<{ rows: UpstoxRow[] }>("upstox-instruments-mcx-cds.json").rows];
+export const mcxChains = (): Record<string, McxChainRecord> => fixture<{ chains: Record<string, McxChainRecord> }>("mcx-chains.json").chains;
 export const store = (): InstrumentStore => InstrumentStore.fromUpstox(upstoxRows(), FIXTURE_NOW);
 export const upstoxHolidays = (): Parameters<typeof HolidayCalendar.fromUpstox>[0] => fixture<{ body: { data: Parameters<typeof HolidayCalendar.fromUpstox>[0] } }>("upstox-holidays.json").body.data;
 export const calendar = (): HolidayCalendar => HolidayCalendar.fromUpstox(upstoxHolidays());

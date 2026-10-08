@@ -18,7 +18,7 @@ import type { Instrument } from "./instruments.ts";
 import { displayName } from "./instruments.ts";
 import { probAbove, yearsTo } from "./math.ts";
 import { alignToTick, protectiveLimit, sliceQuantity, liquidity } from "./rules.ts";
-import { charges, sumCharges, type ChargeBreakdown, type Side } from "./charges.ts";
+import { charges, sumCharges, derivChargeSegment, type ChargeBreakdown, type Side } from "./charges.ts";
 import { inr, num, round2 } from "./money.ts";
 import { istDate, shortDate } from "./ist.ts";
 
@@ -172,7 +172,7 @@ function buildLeg(side: Side, s: ChainSide, qty: number, slippage: number): Leg 
 
 function legCharges(legs: Leg[], date: string, useLimit: boolean): ChargeBreakdown {
   return sumCharges(
-    legs.map((l) => charges({ segment: "OPT", exchange: l.inst.exchange, side: l.side, qty: l.qty, price: useLimit ? l.limit : l.price, orders: l.slices.length, date })),
+    legs.map((l) => charges({ segment: derivChargeSegment(l.inst), exchange: l.inst.exchange, side: l.side, qty: l.qty, price: useLimit ? l.limit : l.price, orders: l.slices.length, date })),
   );
 }
 
@@ -182,7 +182,7 @@ function exitCharges(legs: Leg[], date: string): ChargeBreakdown {
     legs.map((l) => {
       const side: Side = l.side === "BUY" ? "SELL" : "BUY";
       const px = (side === "SELL" ? l.quote.bid : l.quote.ask) ?? l.quote.ltp ?? l.price;
-      return charges({ segment: "OPT", exchange: l.inst.exchange, side, qty: l.qty, price: Math.max(px, 0.05), orders: l.slices.length, date });
+      return charges({ segment: derivChargeSegment(l.inst), exchange: l.inst.exchange, side, qty: l.qty, price: Math.max(px, 0.05), orders: l.slices.length, date });
     }),
   );
 }
@@ -232,6 +232,11 @@ function evaluate(kind: Kind, view: View, chain: Chain, s: Strikes, opt: Require
   while (lots > 0 && lots * worstLossUnit * lotSize + legCharges(make(lots), date, true).total > view.risk) lots--;
   const minRisk = round2(worstLossUnit * lotSize + legCharges(make(1), date, true).total);
   if (lots < 1) return { reason: "risk-too-small", minRisk, kind };
+  // never size above what the book shows at the best prices on either leg: a bigger order fills
+  // one leg partly and leaves the other to unwind (found on thin MCX option books)
+  const depthLots = Math.min(Math.floor(probeLong.quote.askQty / lotSize), Math.floor(probeShort.quote.bidQty / lotSize));
+  const capped = depthLots >= 1 && depthLots < lots;
+  if (capped) lots = depthLots;
 
   const legs = make(lots);
   const qty = lots * lotSize;
@@ -246,6 +251,7 @@ function evaluate(kind: Kind, view: View, chain: Chain, s: Strikes, opt: Require
     return above ? p : 1 - p;
   };
   const warnings: string[] = [];
+  if (capped) warnings.push(`Sized to ${lots} lot${lots === 1 ? "" : "s"}: that is all the order book shows at the best prices. Risking more would not fill both legs.`);
   for (const l of legs) {
     const depth = l.side === "BUY" ? l.quote.askQty : l.quote.bidQty;
     if (depth < l.qty) warnings.push(`${l.inst.symbol}: only ${depth} at the best ${l.side === "BUY" ? "offer" : "bid"}; the order may fill partly.`);
