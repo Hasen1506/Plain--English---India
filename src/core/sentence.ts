@@ -6,7 +6,7 @@
 // The parser is deliberately small and deterministic: regexes over a normalised
 // string. Anything it cannot read is reported in `missing`, never guessed.
 
-import { INDICES, displayName } from "./instruments.ts";
+import { INDICES, COMMODITIES, CURRENCIES, displayName } from "./instruments.ts";
 import type { Direction, Mode, View } from "./strategy.ts";
 import type { ExpiryInfo } from "./instruments.ts";
 import { addDays, istDate, shortDate, weekday, longWeekday } from "./ist.ts";
@@ -58,6 +58,7 @@ function normalise(s: string): string {
 export function findUnderlying(t: string, known: string[]): { id: string; at: number; len: number } | null {
   const cands: { id: string; alias: string }[] = [];
   for (const d of INDICES) if (known.includes(d.id)) for (const a of [...d.aliases, d.id.toLowerCase()]) cands.push({ id: d.id, alias: a });
+  for (const d of [...COMMODITIES, ...CURRENCIES]) if (known.includes(d.id)) for (const a of [...d.aliases, d.id.toLowerCase()]) cands.push({ id: d.id, alias: a });
   for (const k of known) if (!INDICES.some((d) => d.id === k)) cands.push({ id: k, alias: k.toLowerCase() });
   cands.sort((a, b) => b.alias.length - a.alias.length);
   for (const c of cands) {
