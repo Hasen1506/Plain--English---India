@@ -115,3 +115,22 @@ export function ivAt(pts: SmilePoint[], K: number): number | null {
 export function row(chain: Chain, strike: number): ChainRow | undefined {
   return chain.rows.find((r) => r.strike === strike);
 }
+
+/**
+ * A chain assembled from per-contract quotes, for venues without an option-chain API
+ * (Upstox: "The Put/Call Option chain is currently not available for the MCX Exchange").
+ * `spot` is the price the options are written on: for MCX the futures contract they devolve
+ * into, for NSE currency the matching future. Contracts without a quote keep q = null.
+ */
+export function chainFromQuotes(p: { underlying: string; expiryDate: string; expiryMs: number; spot: number; insts: Instrument[]; quotes: Record<string, Quote | undefined>; fetchedAt: number; source: string }): Chain {
+  const rows = new Map<number, ChainRow>();
+  for (const i of p.insts) {
+    if ((i.type !== "CE" && i.type !== "PE") || i.strike === null || i.expiryDate !== p.expiryDate) continue;
+    const r = rows.get(i.strike) ?? { strike: i.strike, call: null, put: null };
+    const side = { inst: i, q: p.quotes[i.key] ?? null };
+    if (i.type === "CE") r.call = side;
+    else r.put = side;
+    rows.set(i.strike, r);
+  }
+  return { underlying: p.underlying, expiryDate: p.expiryDate, expiryMs: p.expiryMs, spot: p.spot, rows: [...rows.values()].sort((a, b) => a.strike - b.strike), fetchedAt: p.fetchedAt, source: p.source };
+}
