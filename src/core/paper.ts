@@ -7,7 +7,7 @@
 import type { Instrument } from "./instruments.ts";
 import type { Quote } from "./chain.ts";
 import type { ExecBroker, OrderStatus, PlaceRequest } from "./execution.ts";
-import { charges, type ChargeSegment } from "./charges.ts";
+import { charges, type ChargeSegment, derivChargeSegment } from "./charges.ts";
 import { round2 } from "./money.ts";
 import { istDate } from "./ist.ts";
 
@@ -49,8 +49,7 @@ export interface PaperState {
 export const emptyPaper = (): PaperState => ({ orders: [], positions: {}, seq: 0 });
 
 export function chargeSegment(inst: Instrument, product: "D" | "I"): ChargeSegment {
-  if (inst.type === "CE" || inst.type === "PE") return "OPT";
-  if (inst.type === "FUT") return "FUT";
+  if (inst.type === "CE" || inst.type === "PE" || inst.type === "FUT") return derivChargeSegment(inst);
   return product === "I" ? "EQ_INTRADAY" : "EQ_DELIVERY";
 }
 
