@@ -16,6 +16,12 @@
 //  [SEBI] SEBI turnover fee ₹10 per crore (listed on [UPX] and NSE levies page above)
 //  [STAMP] Indian Stamp Act amendment (Finance Act 2019), uniform rates from 1 Jul 2020
 //         https://upstox.com/announcements/demat-account/revision-in-stamp-duty-rates-on-1st-july-2020/
+//  [UPXC] Upstox brokerage page, Commodity and Currency tabs (read 8 Oct 2026):
+//         MCX futures: brokerage ₹20 or 0.05% (lower), CTT 0.01% sell (non-agri), MCX txn 0.0021%, stamp 0.002% buy
+//         MCX options: brokerage ₹20, CTT 0.05% sell (premium), MCX txn 0.0418%, stamp 0.003% buy
+//         NSE currency futures: brokerage ₹20 or 0.05%, no STT, txn 0.00035% + IPFT ₹0.05/lakh, stamp 0.0001% buy
+//         NSE currency options: brokerage ₹20, no STT, txn 0.0311% + IPFT ₹2/lakh of premium, stamp 0.0001% buy
+//         SEBI ₹10/crore; GST 18% on brokerage + transaction (+ IPFT)
 //  [GST]  18% on brokerage + exchange transaction (incl. IPFT) + DP charges, as stated on [UPX].
 //
 // Not modelled (shown as notes): STT on exercise of in-the-money options at expiry
@@ -26,7 +32,15 @@
 import { round2 } from "./money.ts";
 import type { Exchange } from "./instruments.ts";
 
-export type ChargeSegment = "EQ_DELIVERY" | "EQ_INTRADAY" | "FUT" | "OPT";
+export type ChargeSegment = "EQ_DELIVERY" | "EQ_INTRADAY" | "FUT" | "OPT" | "MCX_FUT" | "MCX_OPT" | "CDS_FUT" | "CDS_OPT";
+
+/** Charge segment of a derivatives contract: equity F&O, MCX or NSE currency. */
+export function derivChargeSegment(inst: { segment: string; type: string }): ChargeSegment {
+  const opt = inst.type === "CE" || inst.type === "PE";
+  if (inst.segment === "MCX_FO") return opt ? "MCX_OPT" : "MCX_FUT";
+  if (inst.segment === "NCD_FO") return opt ? "CDS_OPT" : "CDS_FUT";
+  return opt ? "OPT" : "FUT";
+}
 export type Side = "BUY" | "SELL";
 
 export interface Fill {
@@ -79,8 +93,15 @@ const BROKERAGE_UPSTOX: Schedule["brokerage"] = {
   EQ_INTRADAY: { flat: 20, pct: PCT(0.1) },
   FUT: { flat: 20, pct: PCT(0.05) },
   OPT: { flat: 20, pct: null },
+  MCX_FUT: { flat: 20, pct: PCT(0.05) },
+  MCX_OPT: { flat: 20, pct: null },
+  CDS_FUT: { flat: 20, pct: PCT(0.05) },
+  CDS_OPT: { flat: 20, pct: null },
 };
-const STAMP: Schedule["stampBuy"] = { EQ_DELIVERY: PCT(0.015), EQ_INTRADAY: PCT(0.003), FUT: PCT(0.002), OPT: PCT(0.003) };
+const STAMP: Schedule["stampBuy"] = { EQ_DELIVERY: PCT(0.015), EQ_INTRADAY: PCT(0.003), FUT: PCT(0.002), OPT: PCT(0.003), MCX_FUT: PCT(0.002), MCX_OPT: PCT(0.003), CDS_FUT: PCT(0.0001), CDS_OPT: PCT(0.0001) };
+// commodity / currency rows [UPXC]: CTT on sells; exchange txn incl. NSE IPFT for currency
+const COM_CUR_STT = { MCX_FUT: { buy: 0, sell: PCT(0.01) }, MCX_OPT: { buy: 0, sell: PCT(0.05) }, CDS_FUT: { buy: 0, sell: 0 }, CDS_OPT: { buy: 0, sell: 0 } };
+const COM_CUR_TXN = { MCX_FUT: PCT(0.0021), MCX_OPT: PCT(0.0418), CDS_FUT: PCT(0.00035) + PCT(0.00005), CDS_OPT: PCT(0.0311) + PCT(0.002) };
 // BSE equity: groups A/B 0.00375%; X, XC, XD, XT, Z, ZP ₹10,000/crore; SS, ST ₹1,00,000/crore [UPX]
 const BSE_EQ_GROUPS: Record<string, number> = {
   A: PCT(0.00375), B: PCT(0.00375),
@@ -95,8 +116,8 @@ export const SCHEDULES: Schedule[] = [
     sources: ["[UPX]", "[NTX24]", "Finance (No. 2) Act 2024 STT"],
     brokerage: BROKERAGE_UPSTOX,
     brokerageCapPct: PCT(2.5),
-    stt: { EQ_DELIVERY: { buy: PCT(0.1), sell: PCT(0.1) }, EQ_INTRADAY: { buy: 0, sell: PCT(0.025) }, FUT: { buy: 0, sell: PCT(0.02) }, OPT: { buy: 0, sell: PCT(0.1) } },
-    nseTxn: { EQ_DELIVERY: PCT(0.00297), EQ_INTRADAY: PCT(0.00297), FUT: PCT(0.00173), OPT: PCT(0.03503) },
+    stt: { EQ_DELIVERY: { buy: PCT(0.1), sell: PCT(0.1) }, EQ_INTRADAY: { buy: 0, sell: PCT(0.025) }, FUT: { buy: 0, sell: PCT(0.02) }, OPT: { buy: 0, sell: PCT(0.1) }, ...COM_CUR_STT },
+    nseTxn: { EQ_DELIVERY: PCT(0.00297), EQ_INTRADAY: PCT(0.00297), FUT: PCT(0.00173), OPT: PCT(0.03503), ...COM_CUR_TXN },
     bseTxn: { FUT: 0, OPT: PCT(0.0325), eqByGroup: BSE_EQ_GROUPS, eqDefault: null },
     sebiPerCrore: 10,
     stampBuy: STAMP,
@@ -110,8 +131,8 @@ export const SCHEDULES: Schedule[] = [
     sources: ["[UPX]", "[NTX]"],
     brokerage: BROKERAGE_UPSTOX,
     brokerageCapPct: PCT(2.5),
-    stt: { EQ_DELIVERY: { buy: PCT(0.1), sell: PCT(0.1) }, EQ_INTRADAY: { buy: 0, sell: PCT(0.025) }, FUT: { buy: 0, sell: PCT(0.02) }, OPT: { buy: 0, sell: PCT(0.1) } },
-    nseTxn: { EQ_DELIVERY: PER_CRORE(307), EQ_INTRADAY: PER_CRORE(307), FUT: PER_CRORE(183), OPT: PER_CRORE(3553) },
+    stt: { EQ_DELIVERY: { buy: PCT(0.1), sell: PCT(0.1) }, EQ_INTRADAY: { buy: 0, sell: PCT(0.025) }, FUT: { buy: 0, sell: PCT(0.02) }, OPT: { buy: 0, sell: PCT(0.1) }, ...COM_CUR_STT },
+    nseTxn: { EQ_DELIVERY: PER_CRORE(307), EQ_INTRADAY: PER_CRORE(307), FUT: PER_CRORE(183), OPT: PER_CRORE(3553), ...COM_CUR_TXN },
     bseTxn: { FUT: 0, OPT: PCT(0.0325), eqByGroup: BSE_EQ_GROUPS, eqDefault: null },
     sebiPerCrore: 10,
     stampBuy: STAMP,
@@ -125,8 +146,8 @@ export const SCHEDULES: Schedule[] = [
     sources: ["[UPX]", "[NTX]", "[STT]"],
     brokerage: BROKERAGE_UPSTOX,
     brokerageCapPct: PCT(2.5),
-    stt: { EQ_DELIVERY: { buy: PCT(0.1), sell: PCT(0.1) }, EQ_INTRADAY: { buy: 0, sell: PCT(0.025) }, FUT: { buy: 0, sell: PCT(0.05) }, OPT: { buy: 0, sell: PCT(0.15) } },
-    nseTxn: { EQ_DELIVERY: PER_CRORE(307), EQ_INTRADAY: PER_CRORE(307), FUT: PER_CRORE(183), OPT: PER_CRORE(3553) },
+    stt: { EQ_DELIVERY: { buy: PCT(0.1), sell: PCT(0.1) }, EQ_INTRADAY: { buy: 0, sell: PCT(0.025) }, FUT: { buy: 0, sell: PCT(0.05) }, OPT: { buy: 0, sell: PCT(0.15) }, ...COM_CUR_STT },
+    nseTxn: { EQ_DELIVERY: PER_CRORE(307), EQ_INTRADAY: PER_CRORE(307), FUT: PER_CRORE(183), OPT: PER_CRORE(3553), ...COM_CUR_TXN },
     bseTxn: { FUT: 0, OPT: PCT(0.0325), eqByGroup: BSE_EQ_GROUPS, eqDefault: null },
     sebiPerCrore: 10,
     stampBuy: STAMP,
@@ -162,7 +183,8 @@ export function charges(f: Fill): ChargeBreakdown {
   const stt = sttRate * turnover;
 
   let txnRate: number;
-  if (f.exchange === "NSE") txnRate = s.nseTxn[f.segment];
+  if (f.segment in COM_CUR_TXN) txnRate = s.nseTxn[f.segment]; // MCX / NSE currency rates live in the same table
+  else if (f.exchange === "NSE") txnRate = s.nseTxn[f.segment];
   else if (f.segment === "FUT" || f.segment === "OPT") txnRate = s.bseTxn[f.segment];
   else {
     const g = (f.bseGroup ?? "").toUpperCase();
@@ -188,6 +210,7 @@ export function charges(f: Fill): ChargeBreakdown {
   };
   const gst = round2(s.gstRate * (r.brokerage + r.exchangeTxn + r.dp));
   const total = round2(r.brokerage + r.stt + r.exchangeTxn + r.sebiFee + r.stampDuty + r.dp + gst);
+  if (f.segment === "MCX_OPT" && f.side === "BUY") notes.push("An in-the-money MCX option is not cash settled: on expiry it devolves into the underlying futures contract.");
   if (f.segment === "OPT" && f.side === "BUY") notes.push("If this option ends in the money and is exercised, STT of 0.15% of its intrinsic value is charged at expiry.");
   return { turnover: round2(turnover), ...r, gst, total, scheduleId: s.id, notes };
 }
