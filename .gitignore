@@ -1,0 +1,11 @@
+node_modules/
+dist/
+dist-e2e/
+test-results/
+playwright-report/
+.env
+.env.*
+!.env.example
+gateway/data/
+*.log
+.e2e-gw-data/
