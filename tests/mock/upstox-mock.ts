@@ -7,7 +7,8 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { gzipSync } from "node:zlib";
-import { fixture, upstoxRows, store, upstoxOptionChain, coreChain, NSE_CHAIN_FILES, nseExpiryToIso, type NseChain } from "./fixtures.ts";
+import { quotesFromMcx } from "../../src/core/recorded-mcx.ts";
+import { fixture, upstoxRows, mcxChains, FIXTURE_NOW, store, upstoxOptionChain, coreChain, NSE_CHAIN_FILES, nseExpiryToIso, type NseChain } from "./fixtures.ts";
 import type { Quote } from "../../src/core/chain.ts";
 import { charges } from "../../src/core/charges.ts";
 import { chargeSegment } from "../../src/core/paper.ts";
@@ -55,6 +56,12 @@ export function startUpstoxMock(port: number, host = "127.0.0.1") {
         quotes.set(eq.key, { ltp: c.spot, bid: Math.round((c.spot - 0.1) * 10) / 10, ask: c.spot, bidQty: 500, askQty: 800, iv: null, oi: null, ts: 0 });
       }
     }
+  }
+  // MCX: the recorded public MCX option chains (bid/ask/LTP per strike + the futures price the options
+  // are written on), keyed by the recorded Upstox master rows of the same contracts
+  for (const [k, rec] of Object.entries(mcxChains())) {
+    const [u, date] = k.split(":") as [string, string];
+    for (const [key, q] of quotesFromMcx(u, date, rec, s, FIXTURE_NOW, 0)) quotes.set(key, q);
   }
   const gz = gzipSync(Buffer.from(JSON.stringify(upstoxRows())));
   let orders: MockOrder[] = [];
@@ -184,7 +191,8 @@ export function startUpstoxMock(port: number, host = "127.0.0.1") {
         const q = quotes.get(k);
         const i = s.get(k);
         if (!q) continue;
-        data[`${i?.segment ?? "X"}:${i?.symbol ?? k}`] = { instrument_token: k, last_price: q.ltp, oi: q.oi, depth: { buy: [{ price: q.bid ?? 0, quantity: q.bidQty, orders: 1 }], sell: [{ price: q.ask ?? 0, quantity: q.askQty, orders: 1 }] } };
+        const per = i?.qtyInLots ? i.lotSize : 1; // like Upstox, commodity/currency depth is in lots
+        data[`${i?.segment ?? "X"}:${i?.symbol ?? k}`] = { instrument_token: k, last_price: q.ltp, oi: q.oi, depth: { buy: [{ price: q.bid ?? 0, quantity: q.bidQty / per, orders: 1 }], sell: [{ price: q.ask ?? 0, quantity: q.askQty / per, orders: 1 }] } };
       }
       return json(res, 200, { status: "success", data });
     }
