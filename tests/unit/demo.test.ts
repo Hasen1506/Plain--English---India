@@ -31,6 +31,15 @@ describe("demo mode", () => {
     const r = (await d.handle("POST", "/api/trade/options", { mode: "paper", legs })) as { paper: boolean; result: { status: string } };
     expect(r.paper).toBe(true);
     expect(r.result.status).toBe("filled");
+    // Close from the Portfolio: hedge-only refused, live refused, the whole spread closes on the recorded book
+    const bought = legs.find((l) => l.side === "BUY")!.key, sold = legs.find((l) => l.side === "SELL")!.key;
+    await expect(d.handle("POST", "/api/positions/close", { mode: "paper", keys: [bought] })).rejects.toMatchObject({ code: "naked" });
+    await expect(d.handle("POST", "/api/positions/close", { mode: "live", keys: [bought, sold] })).rejects.toMatchObject({ status: 403 });
+    const cl = (await d.handle("POST", "/api/positions/close", { mode: "paper", keys: [bought, sold] })) as { results: { inst: { key: string }; filled: number; qty: number }[] };
+    expect(cl.results.map((x) => x.inst.key)).toEqual([sold, bought]);
+    expect(cl.results.every((x) => x.filled === x.qty)).toBe(true);
+    const pf = (await d.handle("GET", "/api/portfolio")) as { positions: { qty: number; underlying: string | null }[] };
+    expect(pf.positions.every((x) => x.qty === 0 && x.underlying === "NIFTY")).toBe(true);
     await expect(d.handle("POST", "/api/margin", { legs: [] })).rejects.toMatchObject({ status: 503 });
     await expect(d.handle("GET", "/auth/broker/login")).rejects.toMatchObject({ status: 403 });
   });

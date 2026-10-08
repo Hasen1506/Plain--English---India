@@ -32,9 +32,16 @@ export async function setMode(page: Page, mode: "Paper" | "Live"): Promise<void>
   await expect(page.getByTestId(mode === "Live" ? "live-banner" : "paper-banner")).toBeVisible();
 }
 
-export async function tab(page: Page, name: "Options" | "Stocks" | "Portfolio" | "Orders" | "Safety"): Promise<void> {
-  await page.getByRole("tab", { name }).click();
-  await expect(page.getByRole("tab", { name })).toHaveAttribute("aria-selected", "true");
+/** The dock has three tabs (Trade, Portfolio, Safety); Options and Stocks are a switch inside Trade. */
+export async function tab(page: Page, name: "Options" | "Stocks" | "Portfolio" | "Safety"): Promise<void> {
+  const dock = name === "Options" || name === "Stocks" ? "Trade" : name;
+  await page.getByRole("tab", { name: dock }).click();
+  await expect(page.getByRole("tab", { name: dock })).toHaveAttribute("aria-selected", "true");
+  if (dock === "Trade") {
+    const sw = page.getByRole("group", { name: "What to trade" }).getByRole("button", { name: new RegExp(`^${name}`) });
+    await sw.click();
+    await expect(sw).toHaveAttribute("aria-pressed", "true");
+  }
 }
 
 /** Type a view into the plain-English box on the Options tab. */

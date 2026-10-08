@@ -16,6 +16,7 @@ import { underlyingList } from "../src/core/catalog.ts";
 import { quotesFromMcx, type McxChainRecord } from "../src/core/recorded-mcx.ts";
 import { makeQuote, chainFromQuotes, type Chain, type Quote } from "../src/core/chain.ts";
 import { PaperBroker, emptyPaper, unrealised } from "../src/core/paper.ts";
+import { planClose } from "../src/core/close.ts";
 import { executeLegs, closePosition, type ExecDeps, type PlaceRequest, type UnwindResult } from "../src/core/execution.ts";
 import { checkOrder, DEFAULT_RISK, sanitizeRiskConfig, REAL_MONEY_PHRASE, LIVE_BLOCKED, type OrderIntent, type RiskState } from "../src/core/risk.ts";
 import { protectiveLimit, alignToTick } from "../src/core/rules.ts";
@@ -332,7 +333,8 @@ export async function createDemo() {
         const positions = Object.values(paper.state.positions).map((x) => {
           const ltp = quote(x.instrumentKey)?.ltp ?? null;
           const u = unrealised(x, ltp);
-          return { key: x.instrumentKey, symbol: x.symbol, qty: x.qty, avgPrice: x.avgPrice || null, ltp, realised: x.realised, unrealised: u, charges: x.charges, pnl: u === null ? null : round2(x.realised + u - x.charges), paper: true };
+          const i = store.get(x.instrumentKey);
+          return { key: x.instrumentKey, underlying: i?.underlying ?? null, expiryDate: i?.expiryDate ?? null, instType: i?.type ?? null, symbol: x.symbol, qty: x.qty, avgPrice: x.avgPrice || null, ltp, realised: x.realised, unrealised: u, charges: x.charges, pnl: u === null ? null : round2(x.realised + u - x.charges), paper: true };
         });
         const total = positions.every((x) => x.pnl !== null) ? round2(positions.reduce((a, x) => a + (x.pnl ?? 0), 0)) : null;
         return { mode: "paper", paper: true, positions, holdings: [], funds: null, pnl: total, note: "Demo: positions are marked at the recorded 8 Oct 2026 prices." };
@@ -358,6 +360,16 @@ export async function createDemo() {
         }
         log("kill.exit-all");
         return { mode: "paper", paper: true, results, skipped: [] };
+      }
+      case "POST /api/positions/close": {
+        noLive(body);
+        const plan = planClose(body.keys, riskState().netQtyByKey, (k) => store.get(k));
+        if (!plan.ok) return bad(plan.code, plan.message);
+        const dd = deps(undefined, "D", `demo-close-${now().toString(36)}`);
+        const results: UnwindResult[] = [];
+        for (const l of plan.legs) results.push(await closePosition(l.inst, l.netQty, dd));
+        log("positions.close");
+        return { mode: "paper", paper: true, results };
       }
       case "GET /api/audit":
         return { entries: [...audit].reverse().slice(0, Number(q.get("limit") ?? 30)) };

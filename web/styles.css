@@ -522,3 +522,30 @@ body.is-live .x-bal { box-shadow: 0 0 0 2px #b3261e, 0 6px 18px rgba(0,0,0,.16);
   #primary { padding: 6px 12px; font-size: 13px; white-space: nowrap; }
   #primary .x-for { display: none; }
 }
+
+/* ── navigation v4: three labelled tabs (Trade, Portfolio, Safety) instead of five bare icons ── */
+.x-dock .x-ic--lbl { width: auto; min-width: 60px; height: 48px; border-radius: 999px; padding: 0 12px; display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font: 600 11px/1 var(--sans); }
+.x-dock .x-ic--lbl svg { width: 17px; height: 17px; }
+@media (max-width: 380px) { .x-dock .x-ic--lbl { min-width: 52px; height: 46px; padding: 0 8px; } }
+/* Trade: options or stocks, one switch above the sentence */
+.x-seg--trade { max-width: 440px; margin: 0 0 14px; }
+.x-seg--trade button { flex-direction: column; gap: 4px; min-height: 48px; font: 600 14px/1 var(--sans); }
+.x-seg--trade button small { background: none; padding: 0; text-transform: none; letter-spacing: 0; font: 500 11px/1 var(--sans); color: #888; }
+.x-seg--trade button[aria-pressed="true"] small { color: #c9c9c9; }
+/* a pill keeps its trailing comma on its own line (no ", delivery" starting a line) */
+.x-nw { white-space: nowrap; }
+/* portfolio: legs grouped as the spread they belong to, with Close */
+.x-pgroup { display: grid; gap: 8px; background: #F2F1EE; border-radius: 20px; padding: 10px; }
+.x-pgroup__h { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 2px 4px; }
+.x-pgroup__h > span:first-child { display: grid; gap: 3px; min-width: 0; }
+.x-pgroup__h b { font: 600 15px/1.2 var(--sans); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.x-pgroup__h small { font: 500 12px/1.2 var(--sans); color: #777; }
+.x-pgroup__h .x-acts { align-items: center; flex-wrap: nowrap; }
+.x-closebox[hidden] { display: none; }
+.x-closeform { background: #fff; border-radius: 16px; padding: 12px; display: grid; gap: 10px; font: 500 14px/1.4 var(--sans); }
+.x-closeform p { margin: 0; }
+.x-closeform .x-btnrow { margin: 0; }
+.x-closeform .x-buy { padding: 6px 18px; }
+.x-more { margin-top: 10px; }
+.x-more summary { cursor: pointer; font: 600 14px/1.2 var(--sans); color: #333; padding: 10px 0; }
+.x-more .x-poslist { margin-top: 4px; }

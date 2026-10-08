@@ -203,7 +203,7 @@ test("@mobile headline flow fits a phone", async ({ page }) => {
   await noHorizontalOverflow(page);
   // every dock tab is fully on screen (no "Optio…" / "S…" cut-offs)
   const vw = page.viewportSize()!.width;
-  for (const name of ["Options", "Stocks", "Portfolio", "Orders", "Safety"]) {
+  for (const name of ["Trade", "Portfolio", "Safety"]) {
     const b = (await page.getByRole("tab", { name }).boundingBox())!;
     expect(b.x).toBeGreaterThanOrEqual(0);
     expect(b.x + b.width).toBeLessThanOrEqual(vw);
@@ -215,9 +215,65 @@ test("@mobile headline flow fits a phone", async ({ page }) => {
   await page.getByLabel(/I understand I can lose/).check();
   await page.getByTestId("place").click();
   await expect(page.getByTestId("result")).toContainText("Filled");
-  for (const t of ["Portfolio", "Orders", "Safety"] as const) {
+  for (const t of ["Portfolio", "Safety"] as const) {
     await tab(page, t);
     await page.waitForTimeout(300);
     await noHorizontalOverflow(page);
   }
+});
+
+test("Portfolio shows a spread as one group and closes it, sold leg first; orders and trades live there too", async ({ page }) => {
+  await resetMock();
+  await signIn(page);
+  await brokerLogin(page);
+  await setMode(page, "Paper");
+  await tab(page, "Portfolio");
+  await page.getByRole("button", { name: "Reset paper book" }).click();
+  await expect(page.getByTestId("positions-empty")).toBeVisible();
+  await headline(page);
+  await review(page);
+  await page.getByLabel(/I understand I can lose/).check();
+  await page.getByTestId("place").click();
+  await expect(page.getByTestId("result")).toContainText("Filled");
+  await tab(page, "Portfolio");
+  const group = page.getByTestId("pos-group");
+  await expect(group).toHaveCount(1);
+  await expect(group).toContainText("Nifty 50 · Tue 13 Oct");
+  await expect(group.getByTestId("position")).toHaveCount(2);
+  await expect(page.getByText(/Trades today \(2\)/)).toBeVisible();
+  await group.getByTestId("close-group").click();
+  await expect(page.getByTestId("close-form")).toContainText("Close 2 legs");
+  await page.getByTestId("close-confirm").click();
+  await expect(page.getByTestId("close-form")).toHaveCount(0);
+  await expect(group.getByTestId("close-group")).toHaveCount(0);
+  await expect(group).toContainText("closed");
+  await expect(page.getByText(/Trades today \(4\)/)).toBeVisible();
+  // the sold leg (22300 PE) was bought back before the bought leg was sold
+  await page.getByText(/Trades today/).click();
+  const sides = await page.getByTestId("trade").allTextContents();
+  expect(sides[1]).toMatch(/22300 PE.*BUY/s);
+  expect(sides[0]).toMatch(/22200 PE.*SELL/s);
+  expect((await mockState()).orders).toHaveLength(0); // paper: nothing reached the broker
+});
+
+test("leaving the review through the dock leaves no timer behind", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await signIn(page);
+  await brokerLogin(page);
+  await headline(page);
+  await review(page);
+  await tab(page, "Portfolio");
+  await page.waitForTimeout(1500);
+  expect(errors).toEqual([]);
+});
+
+test("an expired gateway session goes back to sign in, with the reason", async ({ page }) => {
+  await signIn(page);
+  await page.evaluate(() => sessionStorage.setItem("pei.token", "expired.token.value"));
+  await page.reload();
+  await expect(page.getByText("Your gateway session ended. Sign in again.")).toBeVisible();
+  await page.getByLabel("Gateway passphrase").fill(PASS);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByTestId("market-chip")).toBeVisible();
 });

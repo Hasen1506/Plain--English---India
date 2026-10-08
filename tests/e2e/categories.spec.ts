@@ -102,7 +102,7 @@ test("@mobile the stocks tab has the same category picker for cash equity", asyn
   await signIn(page);
   await brokerLogin(page);
   await tab(page, "Stocks");
-  await page.getByRole("button", { name: "Stock" }).click();
+  await page.getByRole("button", { name: "Stock", exact: true }).click();
   const seg = pop(page).getByRole("group", { name: "Category" });
   await expect(seg.getByRole("button", { name: "F&O stocks" })).toHaveAttribute("aria-pressed", "true");
   await expect(pop(page).getByRole("button", { name: /Reliance/i }).first()).toBeVisible();
