@@ -955,6 +955,7 @@ function openReview(sg: Suggestion): void {
         <button type="button" class="x-edit" id="toPortfolio">See portfolio</button>
       </div>`;
       $("#toPortfolio").addEventListener("click", () => setTab("portfolio"));
+      $("[data-testid=result]").scrollIntoView({ block: "nearest", behavior: reducedMotion() ? "auto" : "smooth" });
       go.innerHTML = `<span>Done</span>`;
     } catch (e) {
       placed = false;
