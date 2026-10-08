@@ -5,6 +5,6 @@ export default defineConfig(({ mode }) => ({
   root: "web",
   base: mode === "e2e" ? "/" : "./",
   publicDir: false,
-  build: { outDir: mode === "e2e" ? "../dist-e2e" : "../dist", emptyOutDir: true, sourcemap: true, target: "es2022" },
+  build: { outDir: mode === "e2e" ? "../dist-e2e" : "../dist", emptyOutDir: true, sourcemap: true, target: "es2022", chunkSizeWarningLimit: 1500 /* the demo's recorded instrument master, lazy-loaded */ },
   define: mode === "e2e" ? { "import.meta.env.VITE_E2E": JSON.stringify("1") } : {},
 }));
