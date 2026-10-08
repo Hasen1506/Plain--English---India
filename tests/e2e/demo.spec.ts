@@ -22,7 +22,7 @@ test("@mobile Try the demo: labelled everywhere, recorded prices, paper trade fi
   await expect(page.getByRole("button", { name: "Level" })).toContainText("22,300");
   await expect(page.getByRole("button", { name: "Expiry" })).toContainText("Tue 13 Oct");
   await expect(page.getByTestId("spot")).toHaveText("22,433.75");
-  await expect(page.getByTestId("suggestion")).toContainText("SELL NIFTY 22300 PE");
+  await expect(page.getByTestId("suggestion")).toContainText("Sell NIFTY 22300 PE");
   await noHorizontalOverflow(page);
 
   // picker: recorded spot only, no day % and no sparkline (the recording has neither)
@@ -69,4 +69,32 @@ test("demo deep link (#demo) and stocks in the demo stay honest about missing pr
   await page.getByLabel("Search stocks").fill("INFY");
   await page.getByRole("dialog").getByRole("button", { name: /INFY/ }).click();
   await expect(page.getByText(/No recorded price for INFY in the demo/)).toBeVisible();
+});
+
+test("@mobile demo: MCX commodities on the recorded MCX option chain; currency says it has no recorded prices", async ({ page }) => {
+  await page.goto("/#demo");
+  await expect(page.getByTestId("demo-bar")).toBeVisible();
+  await page.getByRole("button", { name: "Underlying" }).click();
+  const seg = page.getByRole("dialog").getByRole("group", { name: "Category" });
+  await seg.getByRole("button", { name: "Metals" }).click();
+  await expect(page.getByRole("dialog")).toContainText("MCX prices recorded 8 Oct 2026 16:13–16:14 IST");
+  await page.getByTestId("pick-underlying").getByRole("button", { name: /Silver Mini/ }).click();
+  await expect(page.getByTestId("market-chip")).toContainText("MCX");
+  await expect(page.getByTestId("chain-meta")).toHaveText(/^Recorded 16:1\d IST$/);
+  await page.getByRole("button", { name: "Amount you are risking in rupees" }).click();
+  await page.getByLabel("Amount value").fill("50000");
+  await page.getByLabel("Amount value").press("Enter");
+  await expect(page.getByTestId("suggestion")).toContainText("SILVERM");
+  await review(page);
+  await expect(page.getByTestId("review-title")).toContainText("DEMO");
+  await page.getByLabel(/I understand I can lose/).check();
+  await page.getByTestId("place").click();
+  await expect(page.getByTestId("result")).toContainText("Paper");
+  await page.getByRole("button", { name: "Edit" }).click();
+  await page.getByRole("button", { name: "Underlying" }).click();
+  await page.getByRole("dialog").getByRole("group", { name: "Category" }).getByRole("button", { name: "Currency" }).click();
+  await expect(page.getByRole("dialog")).toContainText("No recorded currency prices in the demo");
+  await page.getByTestId("pick-underlying").getByRole("button", { name: /USD\/INR/ }).click();
+  await expect(page.getByTestId("no-prices")).toContainText("No recorded currency prices in the demo");
+  await noHorizontalOverflow(page);
 });
