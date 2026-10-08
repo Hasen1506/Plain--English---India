@@ -35,8 +35,8 @@ test("@mobile Try the demo: labelled everywhere, recorded prices, paper trade fi
   await expect(page.getByTestId("review-title")).toContainText("PAPER");
   await expect(page.getByTestId("review-title")).toContainText("DEMO");
   await expect(page.getByRole("heading", { name: /Make ₹1,742 if Nifty 50 stays above 22,300 by Tue 13 Oct/ })).toBeVisible();
-  await expect(page.locator("[data-margin]")).toContainText("not available in the demo");
-  await expect(page.getByTestId("broker-charges")).toContainText("not available in the demo");
+  await expect(page.locator("[data-margin]")).toContainText("no broker in the demo");
+  await expect(page.getByTestId("broker-charges")).toContainText("no broker in the demo");
   await page.getByLabel(/I understand I can lose/).check();
   await expect(page.getByTestId("place")).toContainText("Place paper trade");
   await page.getByTestId("place").click();
