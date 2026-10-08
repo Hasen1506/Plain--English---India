@@ -55,7 +55,9 @@ interface Session {
   confirmPhrase: string;
 }
 interface Spot { ltp: number | null; changePct: number | null; spark: number[] | null }
-type Tab = "options" | "stocks" | "portfolio" | "orders" | "safety";
+/** The screen on show. The dock groups them: Trade (options or stocks), Portfolio, Safety. */
+type Tab = "options" | "stocks" | "portfolio" | "safety";
+type DockTab = "trade" | "portfolio" | "safety";
 type PopKey = "u" | "d" | "l" | "e" | "r" | "eside" | "esize" | "estock" | "eprod";
 
 const CATS: { id: Category; label: string }[] = [
@@ -110,13 +112,14 @@ function toast(msg: string, kind: "ok" | "err" = "ok"): void {
 }
 
 // ── shell: floating balance pill on top, view, dock below (sister app layout) ──
-const TABS: { id: Tab; label: string; icon: string }[] = [
-  { id: "options", label: "Options", icon: ICON.build },
-  { id: "stocks", label: "Stocks", icon: ICON.swap },
+// Three jobs, three tabs, each with a visible label: make a trade, see what you have, stay safe.
+const TABS: { id: DockTab; label: string; icon: string }[] = [
+  { id: "trade", label: "Trade", icon: ICON.build },
   { id: "portfolio", label: "Portfolio", icon: ICON.bars },
-  { id: "orders", label: "Orders", icon: ICON.history },
   { id: "safety", label: "Safety", icon: ICON.shield },
 ];
+const dockOf = (t: Tab): DockTab => (t === "options" || t === "stocks" ? "trade" : t);
+let lastTrade: "options" | "stocks" = "options";
 
 function shell(): void {
   document.body.classList.add("x-app");
@@ -129,13 +132,13 @@ function shell(): void {
   </main>
   <nav class="x-dock" aria-label="Sections">
     <span class="x-tabs" role="tablist">
-      ${TABS.map((t) => `<button type="button" class="x-ic${S.tab === t.id ? " is-on" : ""}" role="tab" data-tab="${t.id}" aria-label="${t.label}" title="${t.label}" aria-selected="${S.tab === t.id}">${t.icon}</button>`).join("")}
+      ${TABS.map((t) => `<button type="button" class="x-ic x-ic--lbl${dockOf(S.tab) === t.id ? " is-on" : ""}" role="tab" data-tab="${t.id}" aria-selected="${dockOf(S.tab) === t.id}">${t.icon}<span>${t.label}</span></button>`).join("")}
     </span>
     <span class="x-toast" id="toast" role="status" hidden></span>
     <span class="x-sep" id="dockSep" hidden></span>
     <button type="button" class="x-buy" id="primary" data-testid="dock-primary" hidden></button>
   </nav>`;
-  app.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach((b) => b.addEventListener("click", () => setTab(b.dataset.tab as Tab)));
+  app.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach((b) => b.addEventListener("click", () => setTab(b.dataset.tab === "trade" ? lastTrade : (b.dataset.tab as Tab))));
   $("#exitDemo")?.addEventListener("click", exitDemo);
   $("#primary").addEventListener("click", () => {
     const sg = chosen();
@@ -145,10 +148,12 @@ function shell(): void {
 
 function setTab(t: Tab): void {
   closePop();
+  stopScreenTimers();
   S.tab = t;
+  if (t === "options" || t === "stocks") lastTrade = t;
   if (t !== "options") S.review = null;
   app.querySelectorAll<HTMLElement>("[data-tab]").forEach((x) => {
-    const on = x.dataset.tab === t;
+    const on = x.dataset.tab === dockOf(t);
     x.setAttribute("aria-selected", String(on));
     x.classList.toggle("is-on", on);
   });
@@ -202,6 +207,22 @@ function topPill(): void {
   else if (b.loggedIn) slot.innerHTML = `<span class="x-bal" data-testid="broker-chip" title="Upstox tokens end at 03:30 IST daily"><span class="x-bal__t"><span>${esc(b.name)}${b.sandbox ? " sandbox" : ""} · ${esc(b.userId ?? "")}</span>${modeLine}</span><i>${b.expiresAt ? esc(istClock(b.expiresAt).replace(" IST", "")) : "+"}</i><span class="x-av" aria-hidden="true"></span></span>`;
   else slot.innerHTML = `<button type="button" class="x-bal" id="brokerLogin" data-testid="broker-chip"><span class="x-bal__t"><span>Log in to ${esc(b.name)}</span>${modeLine}</span><i>+</i><span class="x-av" aria-hidden="true"></span></button>`;
   $("#brokerLogin", slot)?.addEventListener("click", brokerLogin);
+}
+
+/** Timers that belong to one screen: stopped whenever the screen changes, so none outlives its DOM. */
+function stopScreenTimers(): void {
+  clearInterval(reviewTimer);
+  clearTimeout(chainTimer);
+  clearTimeout(portfolioTimer);
+}
+
+/** Options or stocks: the switch at the top of the Trade tab. */
+function tradeSwitch(): string {
+  const b = (t: "options" | "stocks", label: string, sub: string) => `<button type="button" data-trade="${t}" aria-pressed="${S.tab === t}" aria-label="${label}">${label}<small aria-hidden="true">${sub}</small></button>`;
+  return `<span class="x-seg x-seg--venue x-seg--trade" role="group" aria-label="What to trade">${b("options", "Options", "defined-risk spreads")}${b("stocks", "Stocks", "shares at a limit")}</span>`;
+}
+function wireTradeSwitch(root: ParentNode): void {
+  root.querySelectorAll<HTMLButtonElement>("[data-trade]").forEach((x) => x.addEventListener("click", () => S.tab !== x.dataset.trade && setTab(x.dataset.trade as "options" | "stocks")));
 }
 
 /**
@@ -397,7 +418,8 @@ async function boot(): Promise<void> {
     render();
     void loadSpots();
   } catch (e) {
-    if (e instanceof ApiError && (e.status === 401 || e.status === 0)) return connectView(errText(e));
+    if (e instanceof ApiError && e.status === 401) return; // api.onAuthLost already shows the sign-in screen
+    if (e instanceof ApiError && e.status === 0) return connectView(errText(e));
     toast(errText(e), "err");
   }
 }
@@ -412,7 +434,6 @@ function render(): void {
     else optionsView(v);
   } else if (S.tab === "stocks") stocksView(v);
   else if (S.tab === "portfolio") void portfolioView(v);
-  else if (S.tab === "orders") void ordersView(v);
   else void safetyView(v);
   dock();
 }
@@ -482,8 +503,9 @@ const pill = (k: "u" | "d" | "l" | "e" | "r"): string =>
 function optionsView(root: HTMLElement): void {
   root.innerHTML = `
   <section class="x-builder" id="builder" aria-label="Build an options trade">
+    ${tradeSwitch()}
     ${tagsHtml({ kind: "Defined-risk spread", spot: true })}
-    <h1 class="x-sent" data-testid="sentence">I think ${pill("u")} ${pill("d")} ${pill("l")} by ${pill("e")}, risking ${pill("r")}</h1>
+    <h1 class="x-sent" data-testid="sentence">I think ${pill("u")} ${pill("d")} ${pill("l")} by <span class="x-nw">${pill("e")},</span> risking ${pill("r")}</h1>
     <div class="x-quote" id="quote" aria-live="polite"></div>
     <p class="x-hint" id="hint" hidden></p>
     <div id="sugs" class="x-sugs"></div>
@@ -495,6 +517,7 @@ function optionsView(root: HTMLElement): void {
     <div class="x-pop" id="pop" role="dialog" hidden></div>
   </section>`;
   wireTags(root);
+  wireTradeSwitch(root);
   $("#nl").addEventListener("submit", (ev) => {
     ev.preventDefault();
     readSentence(String($<HTMLInputElement>("#nlText").value));
@@ -1237,6 +1260,7 @@ function openReview(sg: Suggestion): void {
   const age = () => gwNow() - fetchedAt;
   const fresh = () => age() <= maxAge;
   const gate = () => {
+    if (!go.isConnected) return clearInterval(reviewTimer); // the review was left: this timer is orphaned
     if (placed) return;
     const okPhrase = !live || $<HTMLInputElement>("#phrase").value.trim().toUpperCase() === s.confirmPhrase;
     const f = fresh();
@@ -1369,8 +1393,9 @@ function eqPill(k: "eside" | "esize" | "estock" | "eprod"): string {
 function stocksView(root: HTMLElement): void {
   root.innerHTML = `
   <section class="x-builder x-builder--eq" id="builder" aria-label="Buy or sell a stock">
+    ${tradeSwitch()}
     ${tagsHtml({ kind: "Cash equity · limit order" })}
-    <h1 class="x-sent" id="eqSent">${eqPill("eside")} ${eqPill("esize")} of ${eqPill("estock")}, ${eqPill("eprod")}</h1>
+    <h1 class="x-sent" id="eqSent">${eqPill("eside")} ${eqPill("esize")} of <span class="x-nw">${eqPill("estock")},</span> ${eqPill("eprod")}</h1>
     <form id="eq" class="x-nl">
       <input id="eqText" class="x-in" aria-label="Stock order in plain English" placeholder="Or type it: buy ₹20,000 of Reliance" autocomplete="off">
       <button class="x-edit" type="submit">Read it</button>
@@ -1379,6 +1404,7 @@ function stocksView(root: HTMLElement): void {
     <div class="x-pop" id="pop" role="dialog" hidden></div>
   </section>`;
   wireTags(root);
+  wireTradeSwitch(root);
   root.querySelectorAll<HTMLButtonElement>("#eqSent [data-pop]").forEach((b) =>
     b.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -1574,6 +1600,12 @@ function renderTicket(out: HTMLElement, t: EquityTicket, inst: Instrument, q: Qu
   </article></div>`;
   $("#eqGo").addEventListener("submit", async (ev) => {
     ev.preventDefault();
+    // one order per tap: a double tap must never send the order twice
+    const btn = $<HTMLButtonElement>("#eqGo button[type=submit]");
+    if (btn.disabled) return;
+    btn.disabled = true;
+    const label = btn.textContent;
+    btn.textContent = "Placing…";
     try {
       const r = await api.post<{ placed: boolean; message?: string; status?: { state: string; filled: number } }>("/api/trade/equity", { mode: S.mode, key: inst.key, side: t.side, qty: t.qty, limit: t.limit, product: t.product, confirm: live ? $<HTMLInputElement>("#eqPhrase").value : undefined });
       $("#eqRes").innerHTML = r.placed
@@ -1581,101 +1613,187 @@ function renderTicket(out: HTMLElement, t: EquityTicket, inst: Instrument, q: Qu
         : `<p class="x-hint">${esc(r.message ?? "Not placed")}</p>`;
     } catch (e) {
       $("#eqRes").innerHTML = `<p class="x-hint">${esc(errText(e))}</p>`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = label;
     }
   });
 }
 
-// ── portfolio / orders (sister app .x-port cards, .x-pos rows, empty cards) ──
-interface PosRow { symbol: string; qty: number; avgPrice: number | null; ltp: number | null; pnl: number | null }
+// ── portfolio: P&L, positions grouped by spread (with Close), holdings, orders and trades ──
+interface PosRow { key?: string; symbol: string; qty: number; avgPrice: number | null; ltp: number | null; pnl: number | null; underlying?: string | null; expiryDate?: string | null; instType?: string | null }
+interface PosGroup { id: string; title: string; rows: PosRow[]; closable: boolean }
+
+let portfolioTimer = 0;
+let closing: string | null = null; // the group whose Close is being confirmed (pauses the auto-refresh)
 
 function emptyCard(title: string, text: string, testid: string): string {
   return `<div class="x-card x-emptycard" data-testid="${testid}"><span class="x-emptyic">${ICON.wallet}</span><h2>${esc(title)}</h2><p class="x-empty">${esc(text)}</p></div>`;
 }
 
-function posCards(rows: PosRow[], id: string): string {
-  if (!rows.length) return `<p class="x-empty" data-testid="${id}-empty">None.</p>`;
-  return `<div class="x-poslist" data-testid="${id}">${rows
-    .map(
-      (x) => `<div class="x-pos" data-testid="${id === "positions" ? "position" : "holding"}"><header><span><b class="x-mono">${esc(x.symbol)}</b><small>${x.qty > 0 ? "Long" : x.qty < 0 ? "Short" : "Closed"} ${Math.abs(x.qty)} · avg ${x.avgPrice ? inr2(x.avgPrice) : "—"} · last ${x.ltp ? inr2(x.ltp) : "—"}</small></span><b class="${x.pnl === null ? "" : x.pnl >= 0 ? "x-up" : "x-dn"}">${x.pnl === null ? "—" : signedInr(x.pnl)}</b></header></div>`,
-    )
-    .join("")}</div>`;
+function posRow(x: PosRow, testid: string): string {
+  return `<div class="x-pos" data-testid="${testid}"><header><span><b class="x-mono">${esc(x.symbol)}</b><small>${x.qty > 0 ? "Long" : x.qty < 0 ? "Short" : "Closed"} ${Math.abs(x.qty)} · avg ${x.avgPrice ? inr2(x.avgPrice) : "—"} · last ${x.ltp ? inr2(x.ltp) : "—"}</small></span><b class="${x.pnl === null ? "" : x.pnl >= 0 ? "x-up" : "x-dn"}">${x.pnl === null ? "—" : signedInr(x.pnl)}</b></header></div>`;
+}
+
+/** Legs of the same underlying and expiry belong together (a spread): they are shown, and closed, as one. */
+function posGroups(rows: PosRow[]): PosGroup[] {
+  const m = new Map<string, PosGroup>();
+  for (const x of rows) {
+    const deriv = x.instType && x.instType !== "EQ" && x.underlying && x.expiryDate;
+    const id = deriv ? `${x.underlying}|${x.expiryDate}` : (x.key ?? x.symbol);
+    const g = m.get(id) ?? { id, title: deriv ? `${underlyingLabel(x.underlying!)} · ${shortD(x.expiryDate!)}` : x.symbol, rows: [], closable: false };
+    g.rows.push(x);
+    if (deriv && x.key && x.qty !== 0) g.closable = true;
+    m.set(id, g);
+  }
+  // open groups first
+  return [...m.values()].sort((a, b) => Number(b.rows.some((r) => r.qty !== 0)) - Number(a.rows.some((r) => r.qty !== 0)));
+}
+
+function groupHtml(g: PosGroup): string {
+  const pnl = g.rows.every((r) => r.pnl !== null) ? g.rows.reduce((a, r) => a + r.pnl!, 0) : null;
+  const legs = g.rows.filter((r) => r.qty !== 0).length;
+  return `<div class="x-pgroup" data-testid="pos-group">
+    <div class="x-pgroup__h"><span><b>${esc(g.title)}</b><small>${legs ? `${legs} open leg${legs === 1 ? "" : "s"}` : "closed"}</small></span><span class="x-acts"><b class="${pnl === null ? "" : pnl >= 0 ? "x-up" : "x-dn"}">${pnl === null ? "—" : signedInr(pnl)}</b>${g.closable ? `<button type="button" class="x-edit x-small" data-close="${esc(g.id)}" data-testid="close-group">Close</button>` : ""}</span></div>
+    ${g.rows.map((r) => posRow(r, "position")).join("")}
+    <div class="x-closebox" data-closebox="${esc(g.id)}" hidden></div>
+  </div>`;
+}
+
+function orderRow(x: Record<string, unknown>): string {
+  const id = String(x.orderId ?? x.id);
+  const state = String(x.state ?? x.status);
+  const side = String(x.side);
+  return `<div class="x-pos" data-testid="order"><header><span><b class="x-mono">${esc(String(x.symbol))}</b><small><span class="${side === "BUY" ? "x-up" : "x-dn"}">${esc(side)}</span> ${x.filled ?? 0}/${x.qty} @ ${inr2(Number(x.price ?? x.limit))} · <span class="x-mono">${esc(id)}</span></small></span><span class="x-acts"><span class="x-state x-state--${esc(state)}">${esc(state)}</span>${state === "open" ? `<button type="button" class="x-edit x-small" data-cancel="${esc(id)}">Cancel</button>` : ""}</span></header></div>`;
 }
 
 function pageHead(): string {
   return `<div class="x-pagehead">${tagsHtml({})}</div>`;
 }
 
-async function portfolioView(root: HTMLElement): Promise<void> {
-  root.innerHTML = `${pageHead()}<p class="x-empty x-loading">Loading ${S.mode} portfolio…</p>`;
-  wireTags(root);
-  try {
-    const p = await api.get<{ paper: boolean; positions: PosRow[]; holdings: PosRow[]; funds: { available: number | null } | null; pnl: number | null; note?: string | null }>(`/api/portfolio?mode=${S.mode}`);
-    if (S.tab !== "portfolio") return;
-    root.innerHTML = `${pageHead()}
+type PortfolioRes = { paper: boolean; positions: PosRow[]; holdings: PosRow[]; funds: { available: number | null } | null; pnl: number | null; note?: string | null };
+
+async function portfolioView(root: HTMLElement, quiet = false): Promise<void> {
+  clearTimeout(portfolioTimer);
+  if (!quiet) {
+    closing = null;
+    root.innerHTML = `${pageHead()}<p class="x-empty x-loading">Loading ${S.mode} portfolio…</p>`;
+    wireTags(root);
+  }
+  const mode = S.mode;
+  const [pr, or, tr] = await Promise.allSettled([
+    api.get<PortfolioRes>(`/api/portfolio?mode=${mode}`),
+    api.get<{ paper: boolean; orders: Record<string, unknown>[] }>(`/api/orders?mode=${mode}`),
+    api.get<{ trades: Record<string, unknown>[] }>(`/api/trades?mode=${mode}`),
+  ]);
+  if (S.tab !== "portfolio" || S.mode !== mode || (quiet && closing)) return;
+  const openDetails = new Set([...root.querySelectorAll<HTMLDetailsElement>("details[id]")].filter((d) => d.open).map((d) => d.id));
+  const p = pr.status === "fulfilled" ? pr.value : null;
+  const orders = or.status === "fulfilled" ? or.value.orders : [];
+  const live = orders.filter((x) => String(x.state ?? x.status) === "open");
+  const done = orders.filter((x) => String(x.state ?? x.status) !== "open");
+  const trades = tr.status === "fulfilled" ? tr.value.trades : [];
+  const groups = p ? posGroups(p.positions) : [];
+  const paper = mode === "paper";
+  root.innerHTML = `${pageHead()}
     <section class="x-port">
-      <div class="x-card x-hero">
-        <div class="x-card__top"><span>${S.demo ? "Demo · " : ""}${p.paper ? "Paper book" : "Broker account"}</span>${p.paper ? `<button type="button" class="x-edit" id="resetPaper">Reset paper book</button>` : ""}</div>
-        <h2 class="x-rh">${p.paper ? "Paper portfolio" : "Portfolio"}</h2>
+      ${
+        p
+          ? `<div class="x-card x-hero">
+        <div class="x-card__top"><span>${S.demo ? "Demo · " : ""}${paper ? "Paper book" : "Broker account"} · updated ${esc(istClock(gwNow()))}</span><span class="x-acts"><button type="button" class="x-edit x-small" id="pfRefresh">Refresh</button>${paper ? `<button type="button" class="x-edit x-small" id="resetPaper">Reset paper book</button>` : ""}</span></div>
+        <h2 class="x-rh">${paper ? "Paper portfolio" : "Portfolio"}</h2>
         <p class="x-big ${p.pnl === null ? "" : p.pnl >= 0 ? "x-up" : "x-dn"}" ${p.pnl !== null ? 'data-testid="pnl"' : ""}>${p.pnl !== null ? signedInr(p.pnl) : `<span class="x-empty">P&amp;L unavailable</span>`}</p>
         ${p.funds ? `<p class="x-empty">Available to trade: <b>${p.funds.available !== null ? inr(p.funds.available) : "—"}</b></p>` : ""}
         ${p.note ? `<p class="x-warn">${esc(p.note)}</p>` : ""}
       </div>
-      <div class="x-card"><h2>Positions</h2>${posCards(p.positions, "positions")}</div>
-      ${p.paper ? "" : `<div class="x-card"><h2>Holdings</h2>${posCards(p.holdings, "holdings")}</div>`}
+      <div class="x-card"><h2>Positions</h2>${groups.length ? `<div class="x-poslist" data-testid="positions">${groups.map(groupHtml).join("")}</div><p class="x-pop__note x-left">Close buys back sold legs first, then sells bought legs, with protective IOC limit orders${paper ? "" : ". Live closes need the REAL MONEY phrase"}.</p>` : `<p class="x-empty" data-testid="positions-empty">No positions. Build one on the Trade tab.</p>`}</div>
+      ${paper ? "" : `<div class="x-card"><h2>Holdings</h2>${p.holdings.length ? `<div class="x-poslist" data-testid="holdings">${p.holdings.map((x) => posRow(x, "holding")).join("")}</div>` : `<p class="x-empty" data-testid="holdings-empty">None.</p>`}</div>`}`
+          : emptyCard("Portfolio unavailable", errText((pr as PromiseRejectedResult).reason), "portfolio-error")
+      }
+      <div class="x-card"><div class="x-card__top"><span>${S.demo ? "Demo · " : ""}${paper ? "Paper" : "Broker"}</span></div><h2 class="x-rh x-rh--sm">Orders</h2>
+        ${or.status === "rejected" ? `<p class="x-hint" data-testid="orders-error">${esc(errText(or.reason))}</p>` : live.length ? `<div class="x-poslist" data-testid="orders">${live.map(orderRow).join("")}</div>` : `<p class="x-empty" data-testid="orders-empty">No open orders.</p>`}
+        ${done.length ? `<details class="x-more" id="pfHistory"><summary>Order history (${done.length})</summary><div class="x-poslist" data-testid="order-history">${done.map(orderRow).join("")}</div></details>` : ""}
+        ${trades.length ? `<details class="x-more" id="pfTrades"><summary>Trades today (${trades.length})</summary><div class="x-poslist" data-testid="trades">${trades.map((x) => `<div class="x-pos" data-testid="trade"><header><span><b class="x-mono">${esc(String(x.symbol))}</b><small><span class="${x.side === "BUY" ? "x-up" : "x-dn"}">${esc(String(x.side))}</span> ${x.qty} · <span class="x-mono">${esc(String(x.tradeId))}</span></small></span><b>${x.price ? inr2(Number(x.price)) : "—"}</b></header></div>`).join("")}</div></details>` : `<p class="x-empty" data-testid="trades-empty">No trades today.</p>`}
+      </div>
     </section>`;
-    wireTags(root);
-    $("#resetPaper")?.addEventListener("click", async () => {
+  for (const id of openDetails) root.querySelector<HTMLDetailsElement>(`#${id}`)?.setAttribute("open", "");
+  wireTags(root);
+  $("#pfRefresh")?.addEventListener("click", () => void portfolioView(root, true));
+  $("#resetPaper")?.addEventListener("click", async () => {
+    try {
       await api.post("/api/paper/reset");
-      void portfolioView(root);
-    });
-  } catch (e) {
-    root.innerHTML = `${pageHead()}<section class="x-port">${emptyCard("Portfolio unavailable", errText(e), "portfolio-error")}</section>`;
-    wireTags(root);
-  }
+      toast("Paper book reset");
+    } catch (e) {
+      toast(errText(e), "err");
+    }
+    void portfolioView(root, true);
+  });
+  root.querySelectorAll<HTMLButtonElement>("[data-cancel]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      b.disabled = true;
+      try {
+        await api.post("/api/orders/cancel", { mode, orderId: b.dataset.cancel });
+        toast("Order cancelled");
+      } catch (e) {
+        toast(errText(e), "err");
+      }
+      void portfolioView(root, true);
+    }),
+  );
+  root.querySelectorAll<HTMLButtonElement>("[data-close]").forEach((b) => b.addEventListener("click", () => openClose(root, groups.find((g) => g.id === b.dataset.close)!)));
+  // keep P&L and fills current while the screen is open (paused while a Close is being confirmed)
+  portfolioTimer = window.setTimeout(() => void portfolioView(root, true), 10_000);
 }
 
-async function ordersView(root: HTMLElement): Promise<void> {
-  root.innerHTML = `${pageHead()}<p class="x-empty x-loading">Loading orders…</p>`;
-  wireTags(root);
-  try {
-    const [o, t] = await Promise.all([api.get<{ paper: boolean; orders: Record<string, unknown>[] }>(`/api/orders?mode=${S.mode}`), api.get<{ trades: Record<string, unknown>[] }>(`/api/trades?mode=${S.mode}`)]);
-    if (S.tab !== "orders") return;
-    const orders = o.orders.map((x) => {
-      const id = String(x.orderId ?? x.id);
-      const state = String(x.state ?? x.status);
-      const side = String(x.side);
-      return `<div class="x-pos" data-testid="order"><header><span><b class="x-mono">${esc(String(x.symbol))}</b><small><span class="${side === "BUY" ? "x-up" : "x-dn"}">${esc(side)}</span> ${x.filled ?? 0}/${x.qty} @ ${inr2(Number(x.price ?? x.limit))} · <span class="x-mono">${esc(id)}</span></small></span><span class="x-acts"><span class="x-state x-state--${esc(state)}">${esc(state)}</span>${state === "open" ? `<button type="button" class="x-edit x-small" data-cancel="${esc(id)}">Cancel</button>` : ""}</span></header></div>`;
-    });
-    const trades = t.trades.map((x) => `<div class="x-pos" data-testid="trade"><header><span><b class="x-mono">${esc(String(x.symbol))}</b><small><span class="${x.side === "BUY" ? "x-up" : "x-dn"}">${esc(String(x.side))}</span> ${x.qty} · <span class="x-mono">${esc(String(x.tradeId))}</span></small></span><b>${x.price ? inr2(Number(x.price)) : "—"}</b></header></div>`);
-    root.innerHTML = `${pageHead()}<section class="x-hist">
-      <div class="x-card"><div class="x-card__top"><span>${S.demo ? "Demo · " : ""}${o.paper ? "Paper" : "Broker"}</span></div><h2 class="x-rh x-rh--sm">${o.paper ? "Paper orders" : "Order book"}</h2>${orders.length ? `<div class="x-poslist" data-testid="orders">${orders.join("")}</div>` : `<p class="x-empty" data-testid="orders-empty">None.</p>`}</div>
-      <div class="x-card"><h2>Trades today</h2>${trades.length ? `<div class="x-poslist" data-testid="trades">${trades.join("")}</div>` : `<p class="x-empty" data-testid="trades-empty">None.</p>`}</div>
-    </section>`;
-    wireTags(root);
-    root.querySelectorAll<HTMLButtonElement>("[data-cancel]").forEach((b) =>
-      b.addEventListener("click", async () => {
-        await api.post("/api/orders/cancel", { mode: S.mode, orderId: b.dataset.cancel });
-        void ordersView(root);
-      }),
-    );
-  } catch (e) {
-    root.innerHTML = `${pageHead()}<section class="x-hist">${emptyCard("Orders unavailable", errText(e), "orders-error")}</section>`;
-    wireTags(root);
-  }
+/** Inline confirm under a position group: what will be sent, the REAL MONEY phrase when live, then the result. */
+function openClose(root: HTMLElement, g: PosGroup): void {
+  root.querySelectorAll<HTMLElement>("[data-closebox]").forEach((x) => ((x.hidden = true), (x.innerHTML = "")));
+  const box = root.querySelector<HTMLElement>(`[data-closebox="${CSS.escape(g.id)}"]`)!;
+  const live = S.mode === "live";
+  const keys = g.rows.filter((r) => r.qty !== 0 && r.key).map((r) => r.key!);
+  closing = g.id;
+  box.hidden = false;
+  box.innerHTML = `<form class="x-closeform" data-testid="close-form">
+    <p>Close ${keys.length} leg${keys.length === 1 ? "" : "s"} of <b>${esc(g.title)}</b> at protective limit prices${live ? ` with <b>real money</b>` : " (paper)"}.</p>
+    ${live ? `<input class="x-in" id="closePhrase" autocomplete="off" spellcheck="false" placeholder="type ${esc(S.session!.confirmPhrase)}" aria-label="Type ${esc(S.session!.confirmPhrase)} to close">` : ""}
+    <span class="x-btnrow"><button type="submit" class="x-buy x-kill" data-testid="close-confirm">Close now</button><button type="button" class="x-edit" id="closeKeep">Keep it</button></span>
+    <div id="closeRes" aria-live="polite"></div>
+  </form>`;
+  box.querySelector<HTMLInputElement>("#closePhrase")?.focus();
+  $("#closeKeep", box).addEventListener("click", () => {
+    closing = null;
+    box.hidden = true;
+    box.innerHTML = "";
+    void portfolioView(root, true);
+  });
+  box.querySelector("form")!.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const go = box.querySelector<HTMLButtonElement>("[data-testid=close-confirm]")!;
+    if (go.disabled) return;
+    go.disabled = true;
+    go.textContent = "Closing…";
+    try {
+      const r = await api.post<{ results: { inst: { symbol: string }; side: string; qty: number; filled: number; error?: string }[] }>("/api/positions/close", { mode: S.mode, keys, confirm: live ? box.querySelector<HTMLInputElement>("#closePhrase")!.value : undefined });
+      const bad = r.results.filter((x) => x.error);
+      toast(bad.length ? `Not fully closed: ${bad.map((x) => `${x.inst.symbol} ${x.filled}/${x.qty}`).join(", ")}` : `${g.title} closed`, bad.length ? "err" : "ok");
+      closing = null;
+      void portfolioView(root, true);
+    } catch (e) {
+      $("#closeRes", box).innerHTML = `<p class="x-hint" data-testid="close-error">${esc(errText(e))}</p>`;
+      go.disabled = false;
+      go.textContent = "Close now";
+    }
+  });
 }
 
 // ── safety ───────────────────────────────────────────────────────────
 async function safetyView(root: HTMLElement): Promise<void> {
   await refreshSession().catch(() => {});
   const s = S.session!;
-  let audit: { seq: number; ts: number; type: string }[] = [];
-  let brokers: { id: string; name: string; status: string; docs: string }[] = [];
-  try {
-    audit = (await api.get<{ entries: typeof audit }>("/api/audit?limit=30")).entries;
-    brokers = (await api.get<{ brokers: typeof brokers }>("/api/brokers")).brokers;
-  } catch {
-    /* shown empty */
-  }
+  // each list loads on its own: one failing must not blank the other
+  const [ar, br] = await Promise.allSettled([api.get<{ entries: { seq: number; ts: number; type: string }[] }>("/api/audit?limit=30"), api.get<{ brokers: { id: string; name: string; status: string; docs: string }[] }>("/api/brokers")]);
+  const audit = ar.status === "fulfilled" ? ar.value.entries : [];
+  const brokers = br.status === "fulfilled" ? br.value.brokers : [];
   if (S.tab !== "safety") return;
   const live = S.mode === "live";
   root.innerHTML = `${pageHead()}
@@ -1707,12 +1825,12 @@ async function safetyView(root: HTMLElement): Promise<void> {
     <h2 class="x-rh x-rh--sm">${S.demo ? "No broker in the demo" : esc(s.broker.name)}</h2>
     <p class="x-empty">${S.demo ? "The demo never connects to a broker. Sign in to your own gateway to log in to Upstox." : s.broker.loggedIn ? `Logged in as <b>${esc(s.broker.userId ?? "")}</b> until ${s.broker.expiresAt ? esc(istClock(s.broker.expiresAt)) : "?"} (Upstox tokens end at 03:30 IST daily)` : "Not logged in"}</p>
     <div class="x-btnrow">
-      <button type="button" class="x-buy" id="bLogin" ${S.demo ? "disabled" : ""}>Log in to ${esc(S.demo ? "Upstox" : s.broker.name)}</button>
+      <button type="button" class="${s.broker.loggedIn ? "x-edit" : "x-buy"}" id="bLogin" ${S.demo ? "disabled" : ""}>${s.broker.loggedIn ? "Log in again" : `Log in to ${esc(S.demo ? "Upstox" : s.broker.name)}`}</button>
       <button type="button" class="x-edit" id="bRequest" ${S.demo ? "disabled" : ""}>Send login request to my phone</button>
       ${s.broker.loggedIn ? `<button type="button" class="x-edit" id="bLogout">Log out of broker</button>` : ""}
     </div>
     <p class="x-pop__note x-left">Your broker password, PIN and TOTP are typed only on the broker's own page. The gateway keeps the daily access token (encrypted at rest) and the API secret (environment variable).</p>
-    <div class="x-poslist" data-testid="brokers">${brokers.map((b) => `<div class="x-leg"><span><b>${esc(b.name)}</b></span><span class="x-acts">${b.status === "implemented" ? `<span class="x-state x-state--complete">implemented</span>` : `<span class="x-state">not implemented</span>`} ${b.docs ? `<a class="x-small" href="${esc(b.docs)}" rel="noopener" target="_blank">docs</a>` : ""}</span></div>`).join("")}</div>
+    ${brokers.length ? `<details class="x-more"><summary>Supported brokers (${brokers.filter((b) => b.status === "implemented").length} of ${brokers.length})</summary><div class="x-poslist" data-testid="brokers">${brokers.map((b) => `<div class="x-leg"><span><b>${esc(b.name)}</b></span><span class="x-acts">${b.status === "implemented" ? `<span class="x-state x-state--complete">implemented</span>` : `<span class="x-state">not yet</span>`}${b.docs ? `<a class="x-small" href="${esc(b.docs)}" rel="noopener" target="_blank">docs</a>` : ""}</span></div>`).join("")}</div></details>` : ""}
   </div>
   <div class="x-card">
     <div class="x-card__top"><span>Hash-chained</span></div>
@@ -1722,9 +1840,19 @@ async function safetyView(root: HTMLElement): Promise<void> {
   </section>`;
   wireTags(root);
   $<HTMLInputElement>("#ks").addEventListener("change", async (ev) => {
-    await api.post("/api/kill/switch", { on: (ev.target as HTMLInputElement).checked });
-    await refreshSession();
-    toast((ev.target as HTMLInputElement).checked ? "Kill switch ON" : "Kill switch off");
+    const ks = ev.target as HTMLInputElement;
+    const on = ks.checked;
+    ks.disabled = true;
+    try {
+      await api.post("/api/kill/switch", { on });
+      await refreshSession();
+      toast(on ? "Kill switch ON" : "Kill switch off");
+    } catch (e) {
+      ks.checked = !on; // the switch shows the gateway's state, never a wish
+      toast(`Kill switch not changed: ${errText(e)}`, "err");
+    } finally {
+      ks.disabled = false;
+    }
   });
   $("#cancelAll").addEventListener("click", async () => {
     try {
@@ -1745,9 +1873,16 @@ async function safetyView(root: HTMLElement): Promise<void> {
   });
   $("#caps").addEventListener("submit", async (ev) => {
     ev.preventDefault();
-    await api.put("/api/risk", { perTradeCap: $<HTMLInputElement>("#cap1").value, dailyLossCap: $<HTMLInputElement>("#cap2").value });
-    await refreshSession();
-    toast("Limits saved");
+    try {
+      const r = await api.put<{ perTradeCap: number | null; dailyLossCap: number | null }>("/api/risk", { perTradeCap: $<HTMLInputElement>("#cap1").value, dailyLossCap: $<HTMLInputElement>("#cap2").value });
+      await refreshSession();
+      // show what the gateway stored (junk input means "off"), not what was typed
+      $<HTMLInputElement>("#cap1").value = r.perTradeCap === null ? "" : String(r.perTradeCap);
+      $<HTMLInputElement>("#cap2").value = r.dailyLossCap === null ? "" : String(r.dailyLossCap);
+      toast(`Limits saved: per trade ${r.perTradeCap === null ? "off" : inr(r.perTradeCap)}, daily ${r.dailyLossCap === null ? "off" : inr(r.dailyLossCap)}`);
+    } catch (e) {
+      toast(`Limits not saved: ${errText(e)}`, "err");
+    }
   });
   $("#bLogin").addEventListener("click", brokerLogin);
   $("#bRequest").addEventListener("click", async () => {
@@ -1759,11 +1894,24 @@ async function safetyView(root: HTMLElement): Promise<void> {
     }
   });
   $("#bLogout")?.addEventListener("click", async () => {
-    await api.post("/auth/broker/logout");
-    await refreshSession();
+    try {
+      await api.post("/auth/broker/logout");
+      await refreshSession();
+    } catch (e) {
+      toast(errText(e), "err");
+    }
     void safetyView(root);
   });
 }
+
+// the gateway session ended (12 h by default, or the gateway restarted with a new secret): sign in again
+api.onAuthLost = () => {
+  stopScreenTimers();
+  closePop();
+  S.session = null;
+  S.review = null;
+  connectView("Your gateway session ended. Sign in again.");
+};
 
 // session upkeep: market status, token expiry, kill switch
 window.setInterval(() => {

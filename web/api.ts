@@ -23,6 +23,8 @@ export const api = {
   token: sessionStorage.getItem(SS_TOKEN) ?? "",
   /** Demo mode: requests are answered in the browser from recorded fixtures (see demo.ts). */
   demo: null as DemoHandler | null,
+  /** Called once when the gateway rejects our session token (expired or revoked): the app signs in again. */
+  onAuthLost: null as (() => void) | null,
   setBase(u: string) {
     this.base = u.trim().replace(/\/$/, "");
     localStorage.setItem(LS_URL, this.base);
@@ -60,7 +62,10 @@ export const api = {
       /* not JSON */
     }
     if (!r.ok) {
-      if (r.status === 401 && j.error === "unauthorized") this.setToken("");
+      if (r.status === 401 && j.error === "unauthorized" && this.token) {
+        this.setToken("");
+        this.onAuthLost?.();
+      }
       throw new ApiError(r.status, String(j.error ?? r.status), String(j.message ?? `HTTP ${r.status}`));
     }
     return j as T;
