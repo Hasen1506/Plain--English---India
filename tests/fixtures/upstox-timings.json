@@ -1,0 +1,8 @@
+{"recordedAt":"2026-10-08T05:10:09.371Z","date":"2026-10-08","source":"https://api.upstox.com/v2/market/timings/2026-10-08","body":{"status":"success","data":[{"exchange":"NSCOM","start_time":1791430200000,"end_time":1791482400000},
+{"exchange":"CDS","start_time":1791430200000,"end_time":1791459000000},
+{"exchange":"NFO","start_time":1791431100000,"end_time":1791454200000},
+{"exchange":"BSE","start_time":1791431100000,"end_time":1791453600000},
+{"exchange":"BCD","start_time":1791430200000,"end_time":1791459000000},
+{"exchange":"BFO","start_time":1791431100000,"end_time":1791454200000},
+{"exchange":"NSE","start_time":1791431100000,"end_time":1791453600000},
+{"exchange":"MCX","start_time":1791430200000,"end_time":1791482400000}]}}
