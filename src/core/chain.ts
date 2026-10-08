@@ -12,6 +12,7 @@ export interface Quote {
   iv: number | null; // implied vol as a fraction (0.12 = 12%), as reported by the broker
   oi: number | null;
   ts: number; // when the gateway received it (ms)
+  change?: number; // ₹ change vs the previous close, when the broker reports it (Upstox net_change)
 }
 
 export interface ChainSide {
@@ -37,9 +38,10 @@ export interface Chain {
 
 const pos = (x: unknown): number | null => (typeof x === "number" && Number.isFinite(x) && x > 0 ? x : null);
 
-export function makeQuote(p: { ltp?: unknown; bid?: unknown; ask?: unknown; bidQty?: unknown; askQty?: unknown; ivPct?: unknown; oi?: unknown }, ts: number): Quote {
+export function makeQuote(p: { ltp?: unknown; bid?: unknown; ask?: unknown; bidQty?: unknown; askQty?: unknown; ivPct?: unknown; oi?: unknown; change?: unknown }, ts: number): Quote {
   const iv = pos(p.ivPct);
   return {
+    ...(typeof p.change === "number" && Number.isFinite(p.change) ? { change: p.change } : {}),
     ltp: pos(p.ltp),
     bid: pos(p.bid),
     ask: pos(p.ask),
