@@ -10,14 +10,15 @@ import type { BrokerAdapter, MarginLeg, Result } from "./brokers/types.ts";
 import { AuditLog } from "./audit.ts";
 import { StateStore } from "./state.ts";
 import { verifyPassphrase, signJwt, verifyJwt, makeState, checkState, LoginThrottle } from "./auth.ts";
-import { InstrumentStore, INDICES, type Instrument } from "../src/core/instruments.ts";
-import { HolidayCalendar, marketSession, type MarketSession } from "../src/core/calendar.ts";
-import type { Chain, Quote } from "../src/core/chain.ts";
-import { checkOrder, confirmPhraseOk, RateLimiter, sanitizeRiskConfig, type OrderIntent, type RiskState, REAL_MONEY_PHRASE } from "../src/core/risk.ts";
+import { InstrumentStore, venueOf, derivDef, type Instrument, type Venue } from "../src/core/instruments.ts";
+import { underlyingList } from "../src/core/catalog.ts";
+import { HolidayCalendar, marketSession, venueSession, optionExpiryMs, type MarketSession } from "../src/core/calendar.ts";
+import { chainFromQuotes, type Chain, type Quote } from "../src/core/chain.ts";
+import { checkOrder, confirmPhraseOk, RateLimiter, sanitizeRiskConfig, type OrderIntent, type RiskState, REAL_MONEY_PHRASE, LIVE_BLOCKED } from "../src/core/risk.ts";
 import { executeLegs, closePosition, type ExecBroker, type ExecDeps, type PlaceRequest, type ExecResult, type UnwindResult } from "../src/core/execution.ts";
 import { PaperBroker, unrealised } from "../src/core/paper.ts";
 import { protectiveLimit, alignToTick } from "../src/core/rules.ts";
-import { charges, sumCharges } from "../src/core/charges.ts";
+import { charges, sumCharges, derivChargeSegment } from "../src/core/charges.ts";
 import { legsPayoff } from "../src/core/strategy.ts";
 import { istDate, istParts } from "../src/core/ist.ts";
 import { round2 } from "../src/core/money.ts";
@@ -140,8 +141,10 @@ export function createGateway(deps: GatewayDeps) {
   const needStore = (): InstrumentStore => store ?? bad("no-instruments", `Instrument master not loaded${storeError ? `: ${storeError}` : ""}`, 503);
   const sessionFor = (inst: Instrument): MarketSession => {
     if (!cal) return { exchange: inst.exchange, state: "closed", canTrade: false, label: `Holiday list unavailable${calError ? `: ${calError}` : ""}; trading paused`, opensAt: null, closesAt: null };
-    return marketSession(now(), inst.exchange, cal, inst.type === "EQ" ? "EQ" : "FO");
+    return venueSession(now(), venueOf(inst), cal);
   };
+  const VENUES: Venue[] = ["NFO", "BFO", "NSE", "BSE", "MCX", "CDS"];
+  const venueSessions = (t: number) => (cal ? VENUES.map((v) => ({ venue: v, ...venueSession(t, v, cal!) })) : []);
 
   // ── market data ────────────────────────────────────────────────────
   async function quotesFor(keys: string[], maxAgeMs = 1500): Promise<Record<string, Quote>> {
@@ -149,7 +152,12 @@ export function createGateway(deps: GatewayDeps) {
     const stale = keys.filter((k) => !(t - (quoteCache.get(k)?.ts ?? 0) < maxAgeMs));
     if (stale.length && adapter.session()) {
       const r = await adapter.quotes(stale);
-      if (r.ok) for (const [k, q] of Object.entries(r.value)) quoteCache.set(k, q);
+      if (r.ok)
+        for (const [k, q] of Object.entries(r.value)) {
+          // commodity/currency depth comes in lots (assumed, as orders are); the app counts units
+          const inst = store?.get(k);
+          quoteCache.set(k, inst?.qtyInLots ? { ...q, bidQty: q.bidQty * inst.lotSize, askQty: q.askQty * inst.lotSize } : q);
+        }
     }
     const out: Record<string, Quote> = {};
     for (const k of keys) {
@@ -165,7 +173,21 @@ export function createGateway(deps: GatewayDeps) {
     const key = `${u}:${expiry}`;
     const c = chainCache.get(key);
     if (c && now() - c.at < 2500) return c.chain;
-    const chain = unwrap(await adapter.optionChain(s, u, expiry));
+    let chain: Chain;
+    if (derivDef(u)) {
+      // MCX / NSE currency: no option-chain API at Upstox for MCX, so price every contract with market quotes
+      const insts = s.chain(u, expiry);
+      if (!insts.length) bad("no-options", `${derivDef(u)!.label} has no options listed for ${expiry} in today's instrument master (futures only).`, 404);
+      const pk = s.pricingKey(u, expiry, now());
+      if (!pk) bad("no-underlying", `No futures contract to price ${derivDef(u)!.label} options from`, 404);
+      const uq = (await quotesFor([pk!]))[pk!];
+      const spot = uq?.ltp ?? null;
+      if (!spot) bad("no-quote", `No live price for the ${derivDef(u)!.label} futures contract the options are written on`, 502);
+      const near = insts.filter((i) => Math.abs(i.strike! / spot! - 1) <= 0.15);
+      const q = await quotesFor(near.map((i) => i.key));
+      chain = chainFromQuotes({ underlying: u, expiryDate: expiry, expiryMs: optionExpiryMs(insts[0]!.segment, expiry), spot: spot!, insts: near, quotes: q, fetchedAt: now(), source: insts[0]!.segment === "MCX_FO" ? "Upstox quotes · MCX" : "Upstox quotes · NSE currency" });
+      if (!chain.rows.some((r) => r.call?.q || r.put?.q)) bad("no-quote", `Upstox returned no option quotes for ${derivDef(u)!.label} ${expiry}`, 502);
+    } else chain = unwrap(await adapter.optionChain(s, u, expiry));
     chainCache.set(key, { at: now(), chain });
     for (const r of chain.rows) for (const sd of [r.call, r.put]) if (sd?.q) quoteCache.set(sd.inst.key, sd.q);
     return chain;
@@ -281,7 +303,7 @@ export function createGateway(deps: GatewayDeps) {
     const pay = legs.map((l) => ({ inst: l.inst, side: l.side, qty: l.qty, price: l.limit }));
     const worst = Math.min(...pts.map((S) => legsPayoff(pay, S)));
     const date = istDate(now());
-    const ch = sumCharges(legs.map((l) => charges({ segment: "OPT", exchange: l.inst.exchange, side: l.side, qty: l.qty, price: l.limit, date })));
+    const ch = sumCharges(legs.map((l) => charges({ segment: derivChargeSegment(l.inst), exchange: l.inst.exchange, side: l.side, qty: l.qty, price: l.limit, date })));
     return round2(Math.max(0, -worst) + ch.total);
   }
 
@@ -385,6 +407,8 @@ export function createGateway(deps: GatewayDeps) {
     const t = now();
     const markets = cal ? (["NSE", "BSE"] as const).flatMap((ex) => (["FO", "EQ"] as const).map((m) => ({ ...marketSession(t, ex, cal!, m), market: m }))) : [];
     return ok({
+      venues: venueSessions(t),
+      liveBlocked: LIVE_BLOCKED,
       now: t,
       version: VERSION,
       broker: { ...adapter.info, loggedIn: Boolean(s), userId: s?.userId ?? null, userName: s?.userName ?? null, expiresAt: s?.expiresAt ?? null, approvalPendingUntil: approvalPendingUntil > t ? approvalPendingUntil : null },
@@ -401,7 +425,7 @@ export function createGateway(deps: GatewayDeps) {
   route("GET", "/api/market", true, () => {
     if (!cal) bad("no-holidays", `Holiday list unavailable${calError ? `: ${calError}` : ""}`, 503);
     const t = now();
-    return ok({ now: t, source: cal!.source, sessions: (["NSE", "BSE"] as const).flatMap((ex) => (["FO", "EQ"] as const).map((m) => ({ ...marketSession(t, ex, cal!, m), market: m }))) });
+    return ok({ now: t, source: cal!.source, sessions: (["NSE", "BSE"] as const).flatMap((ex) => (["FO", "EQ"] as const).map((m) => ({ ...marketSession(t, ex, cal!, m), market: m }))), venues: venueSessions(t) });
   });
 
   route("GET", "/api/instruments/underlyings", true, () => {
@@ -409,10 +433,7 @@ export function createGateway(deps: GatewayDeps) {
     const t = now();
     return ok({
       loadedAt: s.loadedAt,
-      underlyings: s.optionUnderlyings().map((u) => {
-        const idx = INDICES.find((d) => d.id === u);
-        return { id: u, label: idx?.label ?? u, index: Boolean(idx), exchange: idx?.exchange ?? "NSE", lotSize: s.lotSize(u), spotKey: s.spotKey(u), expiries: s.expiries(u, t) };
-      }),
+      underlyings: underlyingList(s, t),
     });
   });
 
@@ -447,7 +468,7 @@ export function createGateway(deps: GatewayDeps) {
     if (!adapter.session()) bad("no-session", "Log in to Upstox for live prices", 401);
     const ids = (r.query.get("u") ?? "").split(",").filter(Boolean).slice(0, 300);
     const sparkFor = new Set((r.query.get("spark") ?? "").split(",").filter(Boolean).slice(0, 8));
-    const keyOf = new Map(ids.map((u) => [u, s.spotKey(u)] as const));
+    const keyOf = new Map(ids.map((u) => [u, s.refKey(u, now())] as const));
     const keys = [...new Set([...keyOf.values()].filter((k): k is string => Boolean(k)))];
     const q = keys.length ? await quotesFor(keys) : {};
     const spots: Record<string, { ltp: number | null; changePct: number | null; spark: number[] | null }> = {};
@@ -552,6 +573,7 @@ export function createGateway(deps: GatewayDeps) {
       if (a.inst.underlying !== b.inst.underlying || a.inst.expiryDate !== b.inst.expiryDate || a.inst.type !== b.inst.type || a.side === b.side || a.qty !== b.qty)
         bad("defined-risk", "Two legs must form a vertical spread: same underlying, expiry and option type, one bought and one sold, equal size");
     }
+    if (mode === "live") for (const l of legs) if (LIVE_BLOCKED[l.inst.segment]) bad("live-blocked", LIVE_BLOCKED[l.inst.segment]!, 403);
     const worst = worstLossOf(legs);
     const product = r.body.product === "I" ? "I" : "D";
     return withLock(async () => {
