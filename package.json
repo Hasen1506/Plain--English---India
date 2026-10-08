@@ -1,0 +1,40 @@
+{
+  "name": "plain-english-india",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Say what you think Nifty, Bank Nifty, Fin Nifty or Sensex will do, in plain English, and get a defined-risk options spread on an Indian broker (Upstox first). Static frontend + small self-hosted gateway.",
+  "engines": {
+    "node": ">=22.6"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 4173 --strictPort",
+    "gateway": "node --experimental-strip-types --no-warnings gateway/main.ts",
+    "gateway:hash": "node --experimental-strip-types --no-warnings scripts/hash-passphrase.ts",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --project unit --project diff --project gateway",
+    "test:unit": "vitest run --project unit",
+    "test:diff": "vitest run --project diff",
+    "test:gateway": "vitest run --project gateway",
+    "test:e2e": "playwright test",
+    "test:live": "vitest run --project live",
+    "record": "node --experimental-strip-types --no-warnings scripts/record-fixtures.ts"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@playwright/test": "^1.64.0",
+    "@types/node": "^22.20.5",
+    "eslint": "^9.39.5",
+    "fast-check": "^3.23.2",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.71.1",
+    "vite": "^5.4.21",
+    "vitest": "^2.1.9"
+  },
+  "dependencies": {
+    "protobufjs": "^7.6.6"
+  }
+}
