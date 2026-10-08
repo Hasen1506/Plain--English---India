@@ -128,6 +128,24 @@ describe("gateway: trading, risk and kill switches", () => {
     expect((o.body.orders as { id: string }[])[0]!.id).toMatch(/^PAPER-/);
   });
 
+  it("close one spread: hedge-only is refused, the whole spread closes sold leg first, live needs the phrase", async () => {
+    await h.api("POST", "/api/paper/reset");
+    const { legs } = legsOf();
+    await h.api("POST", "/api/trade/options", { mode: "paper", legs });
+    const bought = legs.find((l) => l.side === "BUY")!.key, sold = legs.find((l) => l.side === "SELL")!.key;
+    expect((await h.api("POST", "/api/positions/close", { mode: "paper", keys: [bought] })).body.error).toBe("naked");
+    expect((await h.api("POST", "/api/positions/close", { mode: "live", keys: [bought, sold] })).body.error).toBe("confirm");
+    const r = await h.api("POST", "/api/positions/close", { mode: "paper", keys: [bought, sold] });
+    expect(r.status).toBe(200);
+    const res = r.body.results as { inst: { key: string }; side: string; filled: number; qty: number }[];
+    expect(res.map((x) => x.inst.key)).toEqual([sold, bought]);
+    expect(res.every((x) => x.filled === x.qty)).toBe(true);
+    const pf = await h.api("GET", "/api/portfolio?mode=paper");
+    expect((pf.body.positions as { qty: number }[]).every((p) => p.qty === 0)).toBe(true);
+    expect((await h.api("POST", "/api/positions/close", { mode: "paper", keys: [sold] })).body.error).toBe("flat");
+    await h.api("POST", "/api/paper/reset");
+  });
+
   it("live trade needs the typed REAL MONEY phrase", async () => {
     const r = await h.api("POST", "/api/trade/options", { mode: "live", legs: legsOf().legs, confirm: "yes" });
     expect(r.status).toBe(400);
@@ -201,6 +219,19 @@ describe("gateway: trading, risk and kill switches", () => {
     expect((ex.body.skipped as { reason: string }[]).some((s) => /delivery holding/.test(s.reason))).toBe(true);
     expect((await h.api("POST", "/api/kill/cancel-all", { mode: "live" })).status).toBe(200);
     await h.api("POST", "/api/kill/switch", { on: false });
+  });
+
+  it("Exit all closes only the intraday part of a stock that is also a delivery holding", async () => {
+    await fetch(`${h.mockUrl}/__mock/reset`, { method: "POST" });
+    const rel = ((await h.api("GET", "/api/instruments/equity?q=reliance")).body.results as { key: string }[])[0]!;
+    // the mock account holds 10 RELIANCE for delivery; buy 2 more intraday
+    const buy = await h.api("POST", "/api/trade/equity", { mode: "live", key: rel.key, side: "BUY", qty: 2, limit: 1190, product: "I", confirm: "REAL MONEY" });
+    expect(buy.body.placed).toBe(true);
+    const ex = await h.api("POST", "/api/kill/exit-all", { mode: "live", confirm: "EXIT ALL" });
+    expect(ex.status).toBe(200);
+    const sells = (await h.mockState()).orders.filter((o) => o.instrument_token === rel.key && o.transaction_type === "SELL");
+    expect(sells.length).toBeGreaterThan(0);
+    for (const o of sells) expect(Number(o.quantity)).toBeLessThanOrEqual(2);
   });
 
   it("orders stay under 10 per second at the broker (rate limiter, 5/s default)", async () => {

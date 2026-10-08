@@ -15,6 +15,7 @@ import { underlyingList } from "../src/core/catalog.ts";
 import { HolidayCalendar, marketSession, venueSession, optionExpiryMs, type MarketSession } from "../src/core/calendar.ts";
 import { chainFromQuotes, type Chain, type Quote } from "../src/core/chain.ts";
 import { checkOrder, confirmPhraseOk, RateLimiter, sanitizeRiskConfig, type OrderIntent, type RiskState, REAL_MONEY_PHRASE, LIVE_BLOCKED } from "../src/core/risk.ts";
+import { planClose } from "../src/core/close.ts";
 import { executeLegs, closePosition, type ExecBroker, type ExecDeps, type PlaceRequest, type ExecResult, type UnwindResult } from "../src/core/execution.ts";
 import { PaperBroker, unrealised } from "../src/core/paper.ts";
 import { protectiveLimit, alignToTick } from "../src/core/rules.ts";
@@ -110,7 +111,7 @@ export function createGateway(deps: GatewayDeps) {
   });
 
   // ── reference data ─────────────────────────────────────────────────
-  async function loadReference(): Promise<void> {
+  async function loadInstruments(): Promise<void> {
     try {
       const list = await adapter.instruments();
       store = new InstrumentStore(list, now());
@@ -120,6 +121,8 @@ export function createGateway(deps: GatewayDeps) {
       storeError = (e as Error).message;
       log(`instrument master unavailable: ${storeError}`);
     }
+  }
+  async function loadHolidays(): Promise<void> {
     try {
       cal = await adapter.holidays();
       calError = null;
@@ -128,12 +131,19 @@ export function createGateway(deps: GatewayDeps) {
       log(`holiday list unavailable: ${calError}`);
     }
   }
+  async function loadReference(): Promise<void> {
+    await loadInstruments();
+    await loadHolidays();
+  }
   let refreshTimer: ReturnType<typeof setInterval> | null = null;
   function scheduleRefresh(): void {
-    // the BOD master is published each morning: reload once per IST day after 08:00
+    // the BOD master is published each morning: reload once per IST day after 08:00. Whatever failed
+    // to load (startup race, broker outage) is retried on every tick, so a failed fetch never pauses
+    // trading for the rest of the day.
     refreshTimer = setInterval(() => {
       const t = now();
-      if (istParts(t).hh >= 8 && (!store || istDate(store.loadedAt) !== istDate(t))) void loadReference();
+      if (!store || (istParts(t).hh >= 8 && istDate(store.loadedAt) !== istDate(t))) void loadInstruments();
+      if (!cal) void loadHolidays();
     }, 10 * 60_000);
     refreshTimer.unref?.();
   }
@@ -643,6 +653,12 @@ export function createGateway(deps: GatewayDeps) {
     return ok({ orderId: unwrap(await adapter.modify(String(r.body.orderId), { price, qty: r.body.qty ? Number(r.body.qty) : undefined, validity: "DAY" })) });
   });
 
+  // what the Portfolio needs to group legs into spreads (and offer Close) without parsing symbols
+  const posMeta = (k: string) => {
+    const i = store?.get(k);
+    return { underlying: i?.underlying ?? null, expiryDate: i?.expiryDate ?? null, instType: i?.type ?? null };
+  };
+
   route("GET", "/api/portfolio", true, async (r) => {
     const mode = (r.query.get("mode") ?? "paper") as Mode;
     if (mode === "paper") {
@@ -652,13 +668,13 @@ export function createGateway(deps: GatewayDeps) {
       const positions = ps.map((p) => {
         const ltp = q[p.instrumentKey]?.ltp ?? null;
         const u = unrealised(p, ltp);
-        return { key: p.instrumentKey, symbol: p.symbol, qty: p.qty, avgPrice: p.avgPrice || null, ltp, realised: p.realised, unrealised: u, charges: p.charges, pnl: u === null ? null : round2(p.realised + u - p.charges), paper: true };
+        return { key: p.instrumentKey, ...posMeta(p.instrumentKey), symbol: p.symbol, qty: p.qty, avgPrice: p.avgPrice || null, ltp, realised: p.realised, unrealised: u, charges: p.charges, pnl: u === null ? null : round2(p.realised + u - p.charges), paper: true };
       });
       const total = positions.every((p) => p.pnl !== null) ? round2(positions.reduce((a, p) => a + (p.pnl ?? 0), 0)) : null;
       return ok({ mode, paper: true, positions, holdings: [], funds: null, pnl: total, note: adapter.session() ? null : "Log in to Upstox to mark paper positions at live prices" });
     }
     const [pos, hold, funds] = await Promise.all([adapter.positions(), adapter.holdings(), adapter.funds()]);
-    const positions = unwrap(pos);
+    const positions = unwrap(pos).map((p) => ({ ...p, ...posMeta(p.key) }));
     return ok({ mode, paper: false, positions, holdings: hold.ok ? hold.value : [], holdingsError: hold.ok ? null : hold.error, funds: funds.ok ? funds.value : null, fundsError: funds.ok ? null : funds.error, pnl: positions.every((p) => p.pnl !== null) ? round2(positions.reduce((a, p) => a + (p.pnl ?? 0), 0)) : null });
   });
 
@@ -739,11 +755,33 @@ export function createGateway(deps: GatewayDeps) {
             skipped.push({ key, reason: "delivery holding (not closed by Exit all)" });
             continue;
           }
+          // close the intraday part only: the net quantity also counts delivery holdings, which stay
+          results.push(await closePosition(inst, intraday, d));
+          continue;
         }
         results.push(await closePosition(inst, q, d));
       }
       audit.append("kill.exit-all.done", { mode, closed: results.map((x) => ({ key: x.inst.key, filled: x.filled, qty: x.qty, error: x.error ?? null })), skipped }, now());
       return ok({ mode, paper: mode === "paper", results: results.map((x) => ({ ...x, inst: serializeInst(x.inst) })), skipped });
+    });
+  });
+
+  // close chosen positions (one spread from the Portfolio): reduce-only protective IOC limits, sold legs first
+  route("POST", "/api/positions/close", true, async (r) => {
+    const mode = requireMode(r.body);
+    if (mode === "live") requireLive(r.body, "close these positions");
+    const s = needStore();
+    return withLock(async () => {
+      const rs = await riskState(mode);
+      const plan = planClose(r.body.keys, rs.netQtyByKey, (k) => s.get(k));
+      if (!plan.ok) return bad(plan.code, plan.message);
+      if (mode === "live") for (const l of plan.legs) if (LIVE_BLOCKED[l.inst.segment]) bad("live-blocked", LIVE_BLOCKED[l.inst.segment]!, 403);
+      audit.append("positions.close.start", { mode, legs: plan.legs.map((l) => ({ key: l.inst.key, netQty: l.netQty })) }, now());
+      const d = execDeps(mode, rs, undefined, "D", `pei-close-${now().toString(36)}`);
+      const results: UnwindResult[] = [];
+      for (const l of plan.legs) results.push(await closePosition(l.inst, l.netQty, d));
+      audit.append("positions.close.done", { mode, closed: results.map((x) => ({ key: x.inst.key, filled: x.filled, qty: x.qty, error: x.error ?? null })) }, now());
+      return ok({ mode, paper: mode === "paper", results: results.map((x) => ({ ...x, inst: serializeInst(x.inst) })) });
     });
   });
 
